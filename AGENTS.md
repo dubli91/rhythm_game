@@ -17,7 +17,7 @@ Run these after implementing to get immediate feedback:
 - Tests: `npm run test` (Vitest, headless node env; watch mode: `npm run test:watch`)
 - Typecheck: `npm run typecheck` (`tsc --noEmit`, strict + verbatimModuleSyntax + noUncheckedIndexedAccess)
 - Lint/format check: `npm run lint` (Biome); auto-format: `npm run format`
-- E2E (headless Chromium): build + `(npm run preview -- --port 4173 &)` + `LD_LIBRARY_PATH=/tmp/pwlibs/usr/lib/x86_64-linux-gnu node scripts/verify-e2e.mjs` — see .claude/skills/verify/SKILL.md for setup/gotchas (missing libnspr4/libnss3/libasound2 workaround, no sudo).
+- E2E (headless Chromium): build + `(npm run preview -- --port 4173 &)` + `LD_LIBRARY_PATH=/tmp/pwlibs/usr/lib/x86_64-linux-gnu node scripts/verify-e2e.mjs` — see .claude/skills/verify/SKILL.md for setup/gotchas (missing libnspr4/libnss3/libasound2 workaround, no sudo). Same recipe runs `scripts/verify-records-e2e.mjs` (records.v1 store assertions); e2e scripts must run from the repo root to resolve `playwright`.
 
 ## Operational Notes
 
