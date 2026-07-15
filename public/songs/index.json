@@ -1,0 +1,37 @@
+{
+  "songs": [
+    {
+      "songId": "song-6f90aea6",
+      "title": "First Light",
+      "artist": "Prism Unit",
+      "genre": "SYNTHPOP",
+      "bpm": {
+        "min": 150,
+        "max": 150
+      },
+      "charts": [
+        {
+          "chartId": "song-6f90aea6-normal",
+          "difficulty": "NORMAL",
+          "level": 4,
+          "noteCount": 145,
+          "chartPath": "songs/song-6f90aea6/chart-normal.json"
+        },
+        {
+          "chartId": "song-6f90aea6-hyper",
+          "difficulty": "HYPER",
+          "level": 7,
+          "noteCount": 332,
+          "chartPath": "songs/song-6f90aea6/chart-hyper.json"
+        }
+      ],
+      "audio": "songs/song-6f90aea6/audio.wav",
+      "offsetMs": 0,
+      "preview": {
+        "startMs": 25600,
+        "durationMs": 10000
+      },
+      "license": "CC0-1.0 — original programmatically generated composition (no third-party material)"
+    }
+  ]
+}
