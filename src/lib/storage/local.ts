@@ -18,6 +18,7 @@ export const STORAGE_KEYS = {
   settings: 'settings.v1',
   playOptions: 'playOptions.v1',
   records: 'records.v1',
+  select: 'select.v1',
 } as const;
 
 export type ReadStatus = 'ok' | 'missing' | 'corrupt' | 'version-mismatch';

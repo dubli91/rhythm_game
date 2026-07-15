@@ -32,6 +32,72 @@
         "durationMs": 10000
       },
       "license": "CC0-1.0 — original programmatically generated composition (no third-party material)"
+    },
+    {
+      "songId": "song-720e0160",
+      "title": "Neon Cascade",
+      "artist": "Aurora Vector",
+      "genre": "ELECTRO",
+      "bpm": {
+        "min": 140,
+        "max": 175
+      },
+      "charts": [
+        {
+          "chartId": "song-720e0160-normal",
+          "difficulty": "NORMAL",
+          "level": 6,
+          "noteCount": 193,
+          "chartPath": "songs/song-720e0160/chart-normal.json"
+        },
+        {
+          "chartId": "song-720e0160-hyper",
+          "difficulty": "HYPER",
+          "level": 8,
+          "noteCount": 331,
+          "chartPath": "songs/song-720e0160/chart-hyper.json"
+        }
+      ],
+      "audio": "songs/song-720e0160/audio.wav",
+      "offsetMs": 0,
+      "preview": {
+        "startMs": 28000,
+        "durationMs": 10000
+      },
+      "license": "CC0-1.0 — original programmatically generated composition (no third-party material)"
+    },
+    {
+      "songId": "song-e09aa1a6",
+      "title": "Overdrive Core",
+      "artist": "Redline Theory",
+      "genre": "HARDCORE",
+      "bpm": {
+        "min": 185,
+        "max": 185
+      },
+      "charts": [
+        {
+          "chartId": "song-e09aa1a6-hyper",
+          "difficulty": "HYPER",
+          "level": 9,
+          "noteCount": 470,
+          "chartPath": "songs/song-e09aa1a6/chart-hyper.json"
+        },
+        {
+          "chartId": "song-e09aa1a6-another",
+          "difficulty": "ANOTHER",
+          "level": 11,
+          "noteCount": 710,
+          "chartPath": "songs/song-e09aa1a6/chart-another.json"
+        }
+      ],
+      "audio": "songs/song-e09aa1a6/audio.wav",
+      "offsetMs": 0,
+      "preview": {
+        "startMs": 36000,
+        "durationMs": 10000
+      },
+      "license": "CC0-1.0 — original programmatically generated composition (no third-party material)"
     }
   ]
 }

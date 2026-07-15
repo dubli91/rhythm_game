@@ -29,7 +29,7 @@ Run these after implementing to get immediate feedback:
   must not re-implement them.
 - Directory layout: `src/lib/` (stdlib), `src/app/` (shell + entry `src/app/main.ts`),
   `src/features/` (feature modules), `public/songs/` (built-in song assets).
-- Regenerate built-in song assets: `node scripts/generate-builtin-song.mjs` (deterministic; rewrites public/songs/). Built-in audio is WAV for now (no ogg encoder in env).
+- Regenerate built-in song assets: `node scripts/generate-builtin-song.mjs` (deterministic; rewrites all of public/songs/ — 3 songs, per-song modules in scripts/builtin-songs/). Built-in audio is WAV for now (no ogg encoder in env). "First Light" must regenerate byte-identical (its module keeps its own float math; verify with `git status public/songs/` after regen).
 - Do NOT `pkill -f 'vite preview'` — the pattern matches the agent shell itself; kill by port (`ss -ltnp | grep 4173`).
 
 ### Codebase Patterns

@@ -5,19 +5,23 @@
 // state machine (screens.ts) owns legality of transitions; this module owns presentation.
 
 import { type PlayResult, startPlaySession } from '../features/play/controller';
+import type { ClearLamp } from '../features/play/gauge';
 import { DEFAULT_KEY_MAP, isValidKeyMap } from '../features/play/input';
 import { type SongAudioContextLike, createSongPlayer } from '../features/play/songPlayer';
 import { GAUGE_TYPES, type GaugeType } from '../features/play/types';
 import { type RecordUpdateOutcome, openRecordsStore } from '../features/records/store';
 import {
-  type CatalogChartEntry,
-  type CatalogSongEntry,
-  type SongCatalog,
-  loadBuiltinCatalog,
-  loadBuiltinSong,
-} from '../features/songs/catalog';
+  type PlayRequest,
+  type RecordLookup,
+  type SelectModel,
+  type SortMode,
+  createSelectModel,
+  isSortMode,
+} from '../features/select/model';
+import { type SongLibrary, loadLibrary, loadPlayableSong } from '../features/songs/library';
 import { type GameAudio, type VolumeSettings, createGameAudio } from '../lib/audio/context';
 import type { Chart, Song } from '../lib/chart/types';
+import { openDatabase } from '../lib/storage/idb';
 import { type LocalDoc, STORAGE_KEYS, createLocalDoc } from '../lib/storage/local';
 import { type ScreenId, createScreenMachine } from './screens';
 
@@ -33,9 +37,9 @@ interface SettingsDoc {
   keyMapLanes: string[];
 }
 
-interface SelectableChart {
-  song: CatalogSongEntry;
-  chart: CatalogChartEntry;
+/** Select-screen preferences persisted separately from play options (song-select.md MUST 4). */
+interface SelectDoc {
+  sortMode: SortMode;
 }
 
 interface LoadedPlayData {
@@ -58,11 +62,26 @@ const STYLES = `
   @keyframes pulse { 50% { opacity: 0.35; } }
   .boot-note { margin-top: 28px; color: #55557a; font-size: 13px; }
   .song-list { list-style: none; margin: 0 0 18px; padding: 0; max-height: 52vh; overflow-y: auto; }
-  .song-list li { padding: 10px 16px; border-left: 4px solid transparent; display: flex; gap: 14px; align-items: baseline; }
+  .song-list li { padding: 10px 16px; border-left: 4px solid transparent; display: flex; gap: 14px; align-items: baseline; cursor: pointer; }
   .song-list li.selected { background: #16182b; border-left-color: #7df3ff; }
+  .song-list li.chart-row { padding: 7px 16px 7px 44px; }
+  .song-list .expander { color: #55557a; font-size: 12px; width: 12px; }
   .song-list .title { font-size: 17px; }
   .song-list .meta { color: #8a8aa8; font-size: 13px; }
   .song-list .diff { font-weight: 700; font-size: 13px; padding: 1px 8px; border-radius: 3px; }
+  .source-badge { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: #55557a; border: 1px solid #2a2a44; border-radius: 3px; padding: 1px 6px; }
+  .record { margin-left: auto; display: flex; gap: 10px; align-items: baseline; font-size: 13px; color: #8a8aa8; }
+  .lamp { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; border-radius: 3px; padding: 2px 7px; background: #1c1c2e; }
+  .lamp-NO_PLAY { color: #55557a; }
+  .lamp-FAILED { color: #ff5f7a; }
+  .lamp-ASSIST_CLEAR { color: #c084fc; }
+  .lamp-EASY_CLEAR { color: #7dff9a; }
+  .lamp-CLEAR { color: #6fd0ff; }
+  .lamp-HARD_CLEAR { color: #f4f4ff; }
+  .lamp-EX_HARD_CLEAR { color: #ffe066; }
+  .lamp-FULL_COMBO { color: #10101c; background: linear-gradient(90deg, #ff5f7a, #ffe066, #6ffce0, #7df3ff); }
+  .sort-line { color: #55557a; font-size: 12px; letter-spacing: 0.14em; margin-bottom: 8px; }
+  .sort-line b { color: #7df3ff; }
   .diff-NORMAL { color: #6fd0ff; border: 1px solid #6fd0ff55; }
   .diff-HYPER { color: #ffc24a; border: 1px solid #ffc24a55; }
   .diff-ANOTHER { color: #ff5f7a; border: 1px solid #ff5f7a55; }
@@ -104,6 +123,11 @@ function defaultPlayOptions(): PlayOptionsDoc {
   return { gaugeType: 'NORMAL', autoplay: false, hiSpeed: 1.0 };
 }
 
+// Hi-speed range/step per play-options.md MUST 1 (0.50–10.00, step 0.25).
+const HI_SPEED_MIN = 0.5;
+const HI_SPEED_MAX = 10;
+const HI_SPEED_STEP = 0.25;
+
 function defaultSettings(): SettingsDoc {
   return {
     globalOffsetMs: 0,
@@ -122,6 +146,15 @@ function isPlayOptionsDoc(data: unknown): data is PlayOptionsDoc {
     typeof doc.hiSpeed === 'number' &&
     Number.isFinite(doc.hiSpeed)
   );
+}
+
+function defaultSelectDoc(): SelectDoc {
+  return { sortMode: 'title' };
+}
+
+function isSelectDoc(data: unknown): data is SelectDoc {
+  if (typeof data !== 'object' || data === null) return false;
+  return isSortMode((data as Record<string, unknown>).sortMode);
 }
 
 function isSettingsDoc(data: unknown): data is SettingsDoc {
@@ -162,6 +195,13 @@ export function bootShell(root: HTMLElement): void {
     version: 1,
     defaultValue: defaultSettings,
     validate: isSettingsDoc,
+  });
+  const selectDoc: LocalDoc<SelectDoc> = createLocalDoc({
+    storage: window.localStorage,
+    key: STORAGE_KEYS.select,
+    version: 1,
+    defaultValue: defaultSelectDoc,
+    validate: isSelectDoc,
   });
   // openRecordsStore performs corruption backup-then-prompt on open (results-records.md MUST 9).
   const recordsStore = openRecordsStore({
@@ -209,17 +249,23 @@ export function bootShell(root: HTMLElement): void {
   titleEl.classList.add('active');
 
   // --- bootstrap (runs alongside TITLE, MUST 3/4) ---
-  let catalog: SongCatalog | null = null;
+  let library: SongLibrary | null = null;
+  let db: IDBDatabase | null = null;
   let bootError: string | null = null;
-  const bootstrap = loadBuiltinCatalog()
-    .then((loaded) => {
-      catalog = loaded;
-      bootNote.textContent = `${loaded.songs.length} song(s) ready`;
-    })
-    .catch((err: unknown) => {
-      bootError = err instanceof Error ? err.message : String(err);
-      bootNote.textContent = `song library failed to load: ${bootError}`;
-    });
+  const bootstrap = (async () => {
+    // Imported songs live in IndexedDB; a broken/unavailable IDB must degrade to
+    // built-ins only, never block boot (song-library.md MUST 6/8).
+    try {
+      db = await openDatabase();
+    } catch (err) {
+      console.error('IndexedDB unavailable; imported songs will be missing', err);
+    }
+    library = await loadLibrary({ db });
+    bootNote.textContent = `${library.entries.length} song(s) ready`;
+  })().catch((err: unknown) => {
+    bootError = err instanceof Error ? err.message : String(err);
+    bootNote.textContent = `song library failed to load: ${bootError}`;
+  });
 
   // --- audio (created on first gesture, MUST 7) ---
   let gameAudio: GameAudio | null = null;
@@ -232,27 +278,47 @@ export function bootShell(root: HTMLElement): void {
     await gameAudio?.unlock();
   }
 
-  // --- SONG_SELECT ---
+  // --- SONG_SELECT (song-select.md MUST 1-8) ---
   selectEl.appendChild(el('h1', undefined, 'SELECT'));
   const errorBanner = el('div', 'error-banner');
   selectEl.appendChild(errorBanner);
+  const sortLine = el('div', 'sort-line');
+  selectEl.appendChild(sortLine);
   const listEl = el('ul', 'song-list');
   selectEl.appendChild(listEl);
   const optionsBar = el('div', 'options-bar');
   const gaugeOpt = el('span');
+  const hiSpeedOpt = el('span');
   const autoplayOpt = el('span');
-  optionsBar.append(gaugeOpt, autoplayOpt);
+  optionsBar.append(gaugeOpt, hiSpeedOpt, autoplayOpt);
   selectEl.appendChild(optionsBar);
   selectEl.appendChild(
     el(
       'div',
       'hint',
-      '↑/↓ choose chart · ENTER play · G gauge type · A autoplay demo · keys: LShift S D F Space J K L',
+      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · G gauge · ←/→ hi-speed · A autoplay · keys: LShift S D F Space J K L',
     ),
   );
 
-  let selectables: SelectableChart[] = [];
-  let selectedIndex = 0;
+  // Live view into the records store so lamps/bests refresh whenever the list
+  // re-renders after a play (song-select.md MUST 3, acceptance criterion 3).
+  const recordLookup: RecordLookup = (songId, chartId) => {
+    const record = recordsStore.getRecord(songId, chartId);
+    if (record === null) return null;
+    return { lamp: record.clearLamp, rank: record.bestRank, exScore: record.bestExScore };
+  };
+  let selectModel: SelectModel | null = null;
+
+  const LAMP_LABELS: Record<ClearLamp, string> = {
+    NO_PLAY: 'NO PLAY',
+    FAILED: 'FAILED',
+    ASSIST_CLEAR: 'ASSIST',
+    EASY_CLEAR: 'EASY',
+    CLEAR: 'CLEAR',
+    HARD_CLEAR: 'HARD',
+    EX_HARD_CLEAR: 'EX HARD',
+    FULL_COMBO: 'FC',
+  };
 
   function showSelectError(message: string | null): void {
     errorBanner.textContent = message ?? '';
@@ -261,41 +327,65 @@ export function bootShell(root: HTMLElement): void {
 
   function renderOptionsBar(): void {
     gaugeOpt.innerHTML = `GAUGE <b>${playOptions.gaugeType.replace('_', ' ')}</b>`;
+    hiSpeedOpt.innerHTML = `HI-SPEED <b>${playOptions.hiSpeed.toFixed(2)}</b>`;
     autoplayOpt.innerHTML = `AUTOPLAY <b>${playOptions.autoplay ? 'ON (no record)' : 'OFF'}</b>`;
   }
 
-  function renderSongList(): void {
+  function renderSelectList(): void {
     listEl.textContent = '';
-    selectables = [];
-    if (catalog === null) return;
-    for (const song of catalog.songs) {
-      for (const chart of song.charts) {
-        selectables.push({ song, chart });
+    const mode = selectModel?.sortMode() ?? 'title';
+    sortLine.innerHTML = `SORT <b>${mode.toUpperCase()}</b>`;
+    if (selectModel === null) return;
+    selectModel.rows().forEach((row, index) => {
+      const li = el('li', row.kind === 'song' ? 'song-row' : 'chart-row');
+      if (row.selected) li.classList.add('selected');
+      if (row.kind === 'song') {
+        li.appendChild(el('span', 'expander', row.expanded ? '▾' : '▸'));
+        li.appendChild(el('span', 'title', row.entry.title));
+        const bpm =
+          row.entry.bpm.min === row.entry.bpm.max
+            ? `${row.entry.bpm.min}`
+            : `${row.entry.bpm.min}-${row.entry.bpm.max}`;
+        li.appendChild(el('span', 'meta', `${row.entry.artist} · ${row.entry.genre} · BPM ${bpm}`));
+        li.appendChild(
+          el('span', 'source-badge', row.entry.source === 'builtin' ? 'BUILT-IN' : 'IMPORTED'),
+        );
+      } else {
+        li.appendChild(
+          el(
+            'span',
+            `diff diff-${row.chart.difficulty}`,
+            `${row.chart.difficulty} ${row.chart.level}`,
+          ),
+        );
+        li.appendChild(el('span', 'meta', `${row.chart.noteCount} notes`));
+        const recordEl = el('span', 'record');
+        const lamp = row.record?.lamp ?? 'NO_PLAY';
+        recordEl.appendChild(el('span', `lamp lamp-${lamp}`, LAMP_LABELS[lamp]));
+        if (row.record !== null && row.record.exScore !== null) {
+          recordEl.appendChild(
+            el('span', undefined, `${row.record.rank ?? ''} ${row.record.exScore}`.trim()),
+          );
+        }
+        li.appendChild(recordEl);
       }
-    }
-    selectables.forEach((item, i) => {
-      const li = el('li');
-      if (i === selectedIndex) li.classList.add('selected');
-      const diff = el(
-        'span',
-        `diff diff-${item.chart.difficulty}`,
-        `${item.chart.difficulty} ${item.chart.level}`,
-      );
-      const title = el('span', 'title', item.song.title);
-      const meta = el(
-        'span',
-        'meta',
-        `${item.song.artist} · ${item.song.genre} · BPM ${item.song.bpm.min === item.song.bpm.max ? item.song.bpm.min : `${item.song.bpm.min}-${item.song.bpm.max}`} · ${item.chart.noteCount} notes`,
-      );
-      li.append(diff, title, meta);
+      li.addEventListener('click', () => {
+        if (selectModel === null) return;
+        const play = selectModel.activateRowAt(index);
+        renderSelectList();
+        if (play !== null) void enterPlayFromSelect(play);
+      });
       listEl.appendChild(li);
     });
+    listEl.querySelector('li.selected')?.scrollIntoView({ block: 'nearest' });
   }
 
-  function moveSelection(delta: number): void {
-    if (selectables.length === 0) return;
-    selectedIndex = (selectedIndex + delta + selectables.length) % selectables.length;
-    renderSongList();
+  function saveSelectDoc(): void {
+    try {
+      selectDoc.write({ sortMode: selectModel?.sortMode() ?? 'title' });
+    } catch (err) {
+      console.error('failed to persist select preferences', err);
+    }
   }
 
   function savePlayOptions(): void {
@@ -311,19 +401,24 @@ export function bootShell(root: HTMLElement): void {
   let lastResult: PlayResult | null = null;
   let playBusy = false;
 
-  async function loadSelected(item: SelectableChart): Promise<LoadedPlayData> {
-    const song = await loadBuiltinSong(item.song);
-    const chart = song.charts.find((c) => c.chartId === item.chart.chartId);
+  async function loadSelected(request: PlayRequest): Promise<LoadedPlayData> {
+    // Lazy load on song decision (song-library.md MUST 2): built-in charts/audio are
+    // fetched, imported ones come from IndexedDB — loadPlayableSong hides the split.
+    const playable = await loadPlayableSong(request.entry, { db });
+    const chart = playable.song.charts.find((c) => c.chartId === request.chart.chartId);
     if (chart === undefined) {
-      throw new Error(`chart ${item.chart.chartId} missing from song ${song.songId}`);
+      throw new Error(`chart ${request.chart.chartId} missing from song ${playable.song.songId}`);
     }
     if (audioCtx === null || gameAudio === null) throw new Error('audio not unlocked');
     const player = createSongPlayer(
       audioCtx as unknown as SongAudioContextLike,
       gameAudio.musicBus,
     );
-    const audioBuffer = await player.loadFromUrl(song.audio.ref);
-    return { song, chart, audioBuffer };
+    const audioBuffer =
+      playable.audio.kind === 'url'
+        ? await player.loadFromUrl(playable.audio.url)
+        : await player.loadFromBlob(playable.audio.blob);
+    return { song: playable.song, chart, audioBuffer };
   }
 
   async function startPlay(data: LoadedPlayData): Promise<void> {
@@ -367,14 +462,13 @@ export function bootShell(root: HTMLElement): void {
     });
   }
 
-  async function enterPlayFromSelect(): Promise<void> {
-    const item = selectables[selectedIndex];
-    if (item === undefined || playBusy) return;
+  async function enterPlayFromSelect(request: PlayRequest): Promise<void> {
+    if (playBusy) return;
     playBusy = true;
     setLoading(true);
     showSelectError(null);
     try {
-      loaded = await loadSelected(item);
+      loaded = await loadSelected(request);
       await startPlay(loaded);
     } catch (err) {
       // Load failure: stay on (or return to) SONG_SELECT with the cause (MUST 15/16).
@@ -491,15 +585,37 @@ export function bootShell(root: HTMLElement): void {
       return;
     }
     if (screen === 'SONG_SELECT') {
+      if (selectModel === null) return;
       if (event.code === 'ArrowUp') {
         event.preventDefault();
-        moveSelection(-1);
+        selectModel.moveCursor(-1);
+        renderSelectList();
       } else if (event.code === 'ArrowDown') {
         event.preventDefault();
-        moveSelection(1);
+        selectModel.moveCursor(1);
+        renderSelectList();
       } else if (event.code === 'Enter') {
         event.preventDefault();
-        void enterPlayFromSelect();
+        const play = selectModel.activate();
+        renderSelectList();
+        if (play !== null) void enterPlayFromSelect(play);
+      } else if (event.code === 'Escape') {
+        // Escape backs out of the difficulty list to the song row (song-select.md MUST 5);
+        // at song level there is nowhere further back, so it does nothing.
+        if (selectModel.collapse()) renderSelectList();
+      } else if (event.code === 'KeyS') {
+        selectModel.cycleSortMode();
+        saveSelectDoc();
+        renderSelectList();
+      } else if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
+        event.preventDefault();
+        const direction = event.code === 'ArrowRight' ? 1 : -1;
+        playOptions.hiSpeed = Math.min(
+          HI_SPEED_MAX,
+          Math.max(HI_SPEED_MIN, playOptions.hiSpeed + direction * HI_SPEED_STEP),
+        );
+        renderOptionsBar();
+        savePlayOptions();
       } else if (event.code === 'KeyG') {
         const next =
           GAUGE_TYPES[(GAUGE_TYPES.indexOf(playOptions.gaugeType) + 1) % GAUGE_TYPES.length];
@@ -521,7 +637,7 @@ export function bootShell(root: HTMLElement): void {
         event.preventDefault();
         lastResult = null;
         machine.transition('SONG_SELECT');
-        renderSongList();
+        renderSelectList();
       }
     }
   });
@@ -536,11 +652,21 @@ export function bootShell(root: HTMLElement): void {
     try {
       await unlockAudio();
       await bootstrap;
-      if (bootError !== null || catalog === null) {
+      if (bootError !== null || library === null) {
         bootNote.textContent = `cannot continue: ${bootError ?? 'song library missing'}`;
         return;
       }
-      renderSongList();
+      if (selectModel === null) {
+        selectModel = createSelectModel({
+          entries: library.entries,
+          records: recordLookup,
+          sortMode: selectDoc.read().sortMode,
+        });
+      }
+      // Non-fatal library problems (e.g. imported songs unavailable) surface on the
+      // select screen instead of blocking entry (song-library.md MUST 6/8).
+      if (library.warnings.length > 0) showSelectError(library.warnings.join(' — '));
+      renderSelectList();
       renderOptionsBar();
       machine.transition('SONG_SELECT');
     } catch (err) {

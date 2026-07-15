@@ -47,6 +47,20 @@ const abandonPlay = async () => {
   await page.waitForSelector('.result-status', { timeout: 8000 });
 };
 
+// The grouped select list shows song rows first; Enter on a song row only
+// expands it. Move the cursor to the requested song row before expanding.
+const navigateToSong = async (title) => {
+  for (let i = 0; i < 40; i++) {
+    const { text, isSong } = await page.$eval('.song-list li.selected', (n) => ({
+      text: n.textContent,
+      isSong: n.classList.contains('song-row'),
+    }));
+    if (isSong && text.includes(title)) return;
+    await page.keyboard.press('ArrowDown');
+  }
+  throw new Error(`could not navigate to song "${title}"`);
+};
+
 await step('load + unlock + fresh storage', async () => {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.evaluate(() => localStorage.clear());
@@ -57,6 +71,11 @@ await step('load + unlock + fresh storage', async () => {
 });
 
 await step('real play abandon writes FAILED record, no bests', async () => {
+  await navigateToSong('First Light');
+  await page.keyboard.press('Enter'); // expand -> NORMAL chart row auto-selected
+  await page.waitForSelector('.song-list li.chart-row', { timeout: 5000 });
+  const selected = await page.$eval('.song-list li.selected', (n) => n.textContent);
+  if (!selected.includes('NORMAL')) throw new Error('expected NORMAL chart selected after expand');
   await page.keyboard.press('Enter'); // enter PLAY
   await abandonPlay();
   const doc = await readRecordsDoc();
@@ -68,7 +87,9 @@ await step('real play abandon writes FAILED record, no bests', async () => {
   if (e.clearLamp !== 'FAILED') throw new Error(`clearLamp ${e.clearLamp}`);
   if (e.bestExScore !== null || e.bestRank !== null || e.minBP !== null)
     throw new Error('abandoned play must not set bests');
-  if (!e.songId || !e.chartId) throw new Error('entry missing songId/chartId');
+  // Pin the exact chart: a wrong-song/wrong-chart record would otherwise pass silently.
+  if (e.songId !== 'song-6f90aea6') throw new Error(`songId ${e.songId}, expected First Light`);
+  if (e.chartId !== 'song-6f90aea6-normal') throw new Error(`chartId ${e.chartId}`);
   if (!/\d{4}-\d{2}-\d{2}T/.test(e.lastPlayedAt)) throw new Error('lastPlayedAt not ISO');
 });
 

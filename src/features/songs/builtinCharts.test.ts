@@ -164,3 +164,78 @@ describe('built-in song catalog', () => {
     );
   });
 });
+
+// --- content coverage (specs/builtin-song-content.md MUST 1-4) -------------------
+// These pin the SHAPE of the shipped catalog, not just per-chart validity: losing
+// a song, a difficulty slot, a level band, or the BPM-change/STOP showcase chart
+// silently weakens what the built-in content is required to exercise.
+
+function loadChartAt(chartPath: string) {
+  const raw: unknown = JSON.parse(readFileSync(join(PUBLIC_DIR, chartPath), 'utf8'));
+  return loadChart(raw);
+}
+
+describe('built-in content coverage (builtin-song-content.md MUST 1-4)', () => {
+  it('ships at least 3 songs, each with at least 2 difficulty slots (MUST 1-2)', () => {
+    expect(catalog.songs.length).toBeGreaterThanOrEqual(3);
+    for (const song of catalog.songs) {
+      expect(song.charts.length, `${song.title} needs >=2 difficulty slots`).toBeGreaterThanOrEqual(
+        2,
+      );
+    }
+  });
+
+  it('covers the low (1-4), mid (5-8), and high (9-12) level bands (MUST 1)', () => {
+    const bands: Array<[number, number]> = [
+      [1, 4],
+      [5, 8],
+      [9, 12],
+    ];
+    for (const [lo, hi] of bands) {
+      const covered = catalog.songs.some((song) =>
+        song.charts.some((chart) => chart.level >= lo && chart.level <= hi),
+      );
+      expect(covered, `no song has a chart in level band ${lo}-${hi}`).toBe(true);
+    }
+  });
+
+  it('ships a >=2-BPM-change + >=1-STOP showcase chart AND a single-BPM baseline (MUST 3-4)', () => {
+    const allCharts = catalog.songs.flatMap((song) =>
+      song.charts.map((entry) => loadChartAt(entry.chartPath)),
+    );
+    // bpmEvents[0] is the initial BPM, so >=2 changes means >=3 events.
+    const showcase = allCharts.find(
+      (chart) => chart.timing.bpmEvents.length >= 3 && chart.timing.stopEvents.length >= 1,
+    );
+    expect(showcase, 'no chart with >=2 BPM changes and >=1 STOP').toBeDefined();
+    const baseline = allCharts.some(
+      (chart) => chart.timing.bpmEvents.length === 1 && chart.timing.stopEvents.length === 0,
+    );
+    expect(baseline, 'no single-BPM/no-STOP baseline chart').toBe(true);
+
+    // The showcase chart must have a note exactly ON a STOP beat, pinning the
+    // "note at a STOP's beat sounds when the STOP begins" timing rule
+    // (src/lib/chart/timing.ts) into real shipped content.
+    const stopBeats = new Set(showcase?.timing.stopEvents.map((event) => event.beat));
+    const noteOnStop = showcase?.notes.some((note) => stopBeats.has(note.beat));
+    expect(noteOnStop, 'showcase chart has no note exactly on a STOP beat').toBe(true);
+  });
+
+  it('chart bpm metadata matches bpmEvents and the catalog bpm range spans the charts', () => {
+    for (const song of catalog.songs) {
+      let songMin = Number.POSITIVE_INFINITY;
+      let songMax = Number.NEGATIVE_INFINITY;
+      for (const entry of song.charts) {
+        const chart = loadChartAt(entry.chartPath);
+        const bpms = chart.timing.bpmEvents.map((event) => event.bpm);
+        expect(chart.bpm.init).toBe(chart.timing.bpmEvents[0]?.bpm);
+        expect(chart.bpm.min).toBe(Math.min(...bpms));
+        expect(chart.bpm.max).toBe(Math.max(...bpms));
+        songMin = Math.min(songMin, chart.bpm.min);
+        songMax = Math.max(songMax, chart.bpm.max);
+      }
+      expect(song.bpm.min, `${song.title} catalog bpm.min`).toBe(songMin);
+      expect(song.bpm.max, `${song.title} catalog bpm.max`).toBe(songMax);
+    }
+  });
+});
