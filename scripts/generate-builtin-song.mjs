@@ -30,6 +30,10 @@ const REPO_ROOT = join(__dirname, '..');
 // specs/builtin-song-content.md MUST 8 / specs/results-records.md SHOULD 12:
 // songId/chartId are a deterministic hash of title+artist so rebuilds keep the
 // same id (and thus keep local records attached).
+//
+// The canonical browser-side copy of fnv1a32/deriveSongId lives in
+// src/lib/chart/ids.ts (this script is plain node and can't import TS); both
+// copies are pinned to agree by src/lib/chart/ids.test.ts.
 
 /** FNV-1a, 32-bit, operating on the UTF-8 bytes of `str`. Returns an unsigned uint32. */
 function fnv1a32(str) {

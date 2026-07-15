@@ -34,3 +34,8 @@ export const GAUGE_TYPES: readonly GaugeType[] = [
 ];
 
 export type DjRank = 'AAA' | 'AA' | 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
+
+/** Lane-arrangement play option. Gameplay support for RANDOM/MIRROR lands in Milestone 6
+ * (play-options.md), but results/records carry the field from day one so record schemas
+ * never migrate. */
+export type Arrangement = 'OFF' | 'RANDOM' | 'MIRROR';

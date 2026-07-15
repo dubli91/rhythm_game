@@ -8,6 +8,7 @@ import { type PlayResult, startPlaySession } from '../features/play/controller';
 import { DEFAULT_KEY_MAP, isValidKeyMap } from '../features/play/input';
 import { type SongAudioContextLike, createSongPlayer } from '../features/play/songPlayer';
 import { GAUGE_TYPES, type GaugeType } from '../features/play/types';
+import { type RecordUpdateOutcome, openRecordsStore } from '../features/records/store';
 import {
   type CatalogChartEntry,
   type CatalogSongEntry,
@@ -77,9 +78,14 @@ const STYLES = `
   .result-status.clear { color: #6ffce0; text-shadow: 0 0 22px #2fd8b066; }
   .result-status.failed { color: #ff5f7a; text-shadow: 0 0 22px #ff445566; }
   .result-sub { color: #8a8aa8; margin-bottom: 26px; }
+  .result-title { font-size: 20px; margin-bottom: 2px; }
+  .result-chart { display: inline-block; font-weight: 700; font-size: 13px; padding: 1px 8px; border-radius: 3px; margin-bottom: 14px; }
   .result-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 8px 40px; max-width: 560px; font-size: 15px; }
   .result-grid .row { display: flex; justify-content: space-between; border-bottom: 1px solid #1c1c2e; padding: 5px 0; }
   .result-grid .label { color: #8a8aa8; }
+  .result-grid .value-wrap { display: flex; align-items: center; gap: 8px; }
+  .result-diff { color: #6fd0ff; font-size: 12px; letter-spacing: 0.02em; }
+  .new-record { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #241a00; background: #ffcc33; border-radius: 3px; padding: 2px 6px; text-shadow: none; }
   .result-rank { font-size: 64px; font-weight: 800; color: #ffe066; margin: 10px 0 20px; }
 `;
 
@@ -156,6 +162,11 @@ export function bootShell(root: HTMLElement): void {
     version: 1,
     defaultValue: defaultSettings,
     validate: isSettingsDoc,
+  });
+  // openRecordsStore performs corruption backup-then-prompt on open (results-records.md MUST 9).
+  const recordsStore = openRecordsStore({
+    storage: window.localStorage,
+    confirmReset: (message) => window.confirm(message),
   });
   const playOptions = playOptionsDoc.read();
   const settings = settingsDoc.read();
@@ -333,8 +344,24 @@ export function bootShell(root: HTMLElement): void {
       hiSpeed: playOptions.hiSpeed,
       onFinished(result) {
         lastResult = result;
+        // recordPlay writes the record once per song end and skips (returns null)
+        // for autoplay plays (results-records.md req 6/7).
+        const outcome = recordsStore.recordPlay(
+          {
+            songId: result.songId,
+            chartId: result.chartId,
+            finishedSong: result.finishedSong,
+            lamp: result.lamp,
+            exScore: result.score.exScore,
+            djRank: result.score.djRank,
+            bp: result.score.bp,
+            arrangement: result.arrangement,
+            autoplay: result.autoplay,
+          },
+          new Date().toISOString(),
+        );
         playEl.textContent = '';
-        renderResults(result);
+        renderResults(result, outcome);
         machine.transition('RESULTS');
       },
     });
@@ -362,13 +389,32 @@ export function bootShell(root: HTMLElement): void {
   }
 
   // --- RESULTS ---
-  function renderResults(result: PlayResult): void {
+  function formatExDiff(diff: number): string {
+    if (diff > 0) return `(+${diff})`;
+    if (diff < 0) return `(−${Math.abs(diff)})`;
+    return '(±0)';
+  }
+
+  function renderResults(result: PlayResult, outcome: RecordUpdateOutcome | null): void {
     resultsEl.textContent = '';
     const cleared = result.clear;
     resultsEl.appendChild(
       el('div', `result-status ${cleared ? 'clear' : 'failed'}`, cleared ? 'CLEAR' : 'FAILED'),
     );
+
+    // Song/chart header (results-records.md req 1). `loaded` should always be set by
+    // the time a result is rendered, but guard defensively rather than assume.
+    if (loaded !== null) {
+      const { song, chart } = loaded;
+      resultsEl.appendChild(el('div', 'result-title', `${song.title} / ${song.artist}`));
+      resultsEl.appendChild(
+        el('div', `result-chart diff-${chart.difficulty}`, `${chart.difficulty} ${chart.level}`),
+      );
+    }
+
     const subParts: string[] = [`${result.gaugeType.replace('_', ' ')} GAUGE`];
+    subParts.push(`HS ${result.hiSpeed.toFixed(2)}`);
+    if (result.arrangement !== 'OFF') subParts.push(result.arrangement);
     if (result.abandoned) subParts.push('early termination (give-up)');
     if (!result.finishedSong && !result.abandoned)
       subParts.push(`died at ${(result.endedAtProgress * 100).toFixed(0)}%`);
@@ -377,27 +423,45 @@ export function bootShell(root: HTMLElement): void {
     resultsEl.appendChild(el('div', 'result-rank', result.score.djRank));
 
     const grid = el('div', 'result-grid');
-    const rows: Array<[string, string]> = [
-      [
-        'EX SCORE',
-        `${result.score.exScore} / ${result.score.maxExScore} (${result.score.exPercent.toFixed(2)}%)`,
-      ],
-      ['MAX COMBO', String(result.score.maxCombo)],
-      ['PGREAT', String(result.score.counts.PGREAT)],
-      ['GREAT', String(result.score.counts.GREAT)],
-      ['GOOD', String(result.score.counts.GOOD)],
-      ['BAD', String(result.score.counts.BAD)],
-      ['POOR (miss)', String(result.score.counts.POOR)],
-      ['POOR (empty)', String(result.score.emptyPoorCount)],
-      ['BP', String(result.score.bp)],
-      ['GAUGE', `${result.finalGauge.toFixed(1)}%`],
-      ['FULL COMBO', result.score.fullCombo ? 'YES' : 'no'],
-    ];
-    for (const [label, value] of rows) {
+    function addRow(label: string, value: string, opts?: { badge?: boolean; note?: string }): void {
       const row = el('div', 'row');
-      row.append(el('span', 'label', label), el('span', undefined, value));
+      row.appendChild(el('span', 'label', label));
+      const valueWrap = el('span', 'value-wrap');
+      valueWrap.appendChild(el('span', undefined, value));
+      if (opts?.note !== undefined) valueWrap.appendChild(el('span', 'result-diff', opts.note));
+      if (opts?.badge === true) valueWrap.appendChild(el('span', 'new-record', 'NEW RECORD'));
+      row.appendChild(valueWrap);
       grid.appendChild(row);
     }
+
+    // ±diff vs best / FIRST PLAY (results-records.md req 2). Autoplay plays (outcome
+    // === null) show nothing extra here — the AUTOPLAY sub-line above already explains why.
+    let exNote: string | undefined;
+    if (outcome !== null) {
+      if (outcome.exScoreDiff !== null) {
+        exNote = formatExDiff(outcome.exScoreDiff);
+      } else if (outcome.previous === null || outcome.previous.bestExScore === null) {
+        exNote = 'FIRST PLAY';
+      }
+    }
+
+    addRow(
+      'EX SCORE',
+      `${result.score.exScore} / ${result.score.maxExScore} (${result.score.exPercent.toFixed(2)}%)`,
+      { badge: outcome?.newExScore === true, note: exNote },
+    );
+    addRow('CLEAR LAMP', result.lamp.replace(/_/g, ' '), { badge: outcome?.newLamp === true });
+    addRow('MAX COMBO', String(result.score.maxCombo));
+    addRow('PGREAT', String(result.score.counts.PGREAT));
+    addRow('GREAT', String(result.score.counts.GREAT));
+    addRow('GOOD', String(result.score.counts.GOOD));
+    addRow('BAD', String(result.score.counts.BAD));
+    addRow('POOR (miss)', String(result.score.counts.POOR));
+    addRow('POOR (empty)', String(result.score.emptyPoorCount));
+    addRow('BP', String(result.score.bp), { badge: outcome?.newMinBP === true });
+    addRow('GAUGE', `${result.finalGauge.toFixed(1)}%`);
+    addRow('FULL COMBO', result.score.fullCombo ? 'YES' : 'no');
+
     resultsEl.appendChild(grid);
     resultsEl.appendChild(el('div', 'hint', 'ENTER retry · ESC back to select'));
   }

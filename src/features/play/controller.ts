@@ -17,7 +17,7 @@ import { NOTE_CONSUMED, NOTE_MISSED, type PlayFrameView, createPlayfieldRenderer
 import { createScorer } from './scoring';
 import type { ScoreSummary } from './scoring';
 import { type SongAudioContextLike, createSongPlayer } from './songPlayer';
-import type { GaugeType, JudgementEvent } from './types';
+import type { Arrangement, GaugeType, JudgementEvent } from './types';
 
 export interface PlayResult {
   /** false when the player abandoned via Escape before the song ended. */
@@ -31,6 +31,12 @@ export interface PlayResult {
   endedAtProgress: number;
   score: ScoreSummary;
   autoplay: boolean;
+  /** Song/chart identity for record keying (results-records.md req 4). */
+  songId: string;
+  chartId: string;
+  /** Options used, for results/record display (results-records.md req 1). */
+  hiSpeed: number;
+  arrangement: Arrangement;
 }
 
 export interface PlaySessionOptions {
@@ -46,6 +52,8 @@ export interface PlaySessionOptions {
   globalOffsetMs: number;
   keyMap?: LaneKeyMap;
   hiSpeed?: number;
+  /** Defaults to 'OFF'; recorded on the result (play-options.md req 10). */
+  arrangement?: Arrangement;
   onFinished(result: PlayResult): void;
 }
 
@@ -106,12 +114,14 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   let ending = false;
   let abandoned = false;
   let autoplayCursor = 0;
+  const resolvedHiSpeed = opts.hiSpeed ?? 1.0;
+  const resolvedArrangement = opts.arrangement ?? 'OFF';
 
   const view: PlayFrameView = {
     songTimeMs: 0,
     currentBeat: 0,
     currentBpm: chart.bpm.init,
-    hiSpeed: opts.hiSpeed ?? 1.0,
+    hiSpeed: resolvedHiSpeed,
     progress: 0,
     heldLanes,
     noteStates,
@@ -166,6 +176,10 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
       endedAtProgress: endProgress,
       score,
       autoplay,
+      songId: song.songId,
+      chartId: chart.chartId,
+      hiSpeed: resolvedHiSpeed,
+      arrangement: resolvedArrangement,
     };
   }
 
