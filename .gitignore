@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+
+# stale python prototype residue (scrapped; specs mandate TS/Vite stack)
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+
+.playwright-libs/
+*.log
