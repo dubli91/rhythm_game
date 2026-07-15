@@ -139,7 +139,7 @@ Milestones 0, 1, and 2 are COMPLETE as of 2026-07-15. Milestone 0 (scaffolding) 
 - **RANDOM re-roll scope:** per play attempt (incl. retries) vs fixed per song-selection session (play-options.md).
 - **Per-song offset (곡별오프셋)** storage/edit surface — no UI or location defined (audio-playback.md, chart-format.md).
 - **Practice BPM change** timing: instant mid-loop vs next-loop-boundary (spec body vs acceptance criteria disagree) (practice-mode.md).
-- **Fade-out duration/curve** on abandon/fail — unspecified (audio-playback.md).
+- **RESOLVED: Fade-out duration/curve** on abandon/fail: 300ms linear fade-out-then-stop (`STOP_FADE_MS`). — unspecified (audio-playback.md).
 - **CN note counting** toward total-note-count / max EX (1 vs 2) — affects gauge R and EX math (chart-format.md, judgement-scoring.md).
 - **Mixdown for very long charts** (10+ min): chunked/segmented render vs single pass; dedup of identical audio across difficulties (bms-import.md, flagged as open question there).
 - **Records versioning:** migration/behavior on version mismatch, export/import collision resolution (results-records.md).
