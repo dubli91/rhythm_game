@@ -2,17 +2,17 @@ export type ScreenId =
   | 'TITLE'
   | 'SONG_SELECT'
   | 'SETTINGS'
-  | 'IMPORT'
   | 'PRACTICE_EDIT'
   | 'PRACTICE_PLAY'
   | 'PLAY'
   | 'RESULTS';
 
+// Exactly the enum + edge list of app-shell-navigation.md MUST 1-2 (the IMPORT
+// screen was removed with the 2026-07-16 BMS-import descope).
 export const ALLOWED_TRANSITIONS: Readonly<Record<ScreenId, readonly ScreenId[]>> = {
   TITLE: ['SONG_SELECT'],
-  SONG_SELECT: ['SETTINGS', 'IMPORT', 'PRACTICE_EDIT', 'PLAY'],
+  SONG_SELECT: ['SETTINGS', 'PRACTICE_EDIT', 'PLAY'],
   SETTINGS: ['SONG_SELECT'],
-  IMPORT: ['SONG_SELECT'],
   PRACTICE_EDIT: ['SONG_SELECT', 'PRACTICE_PLAY'],
   PRACTICE_PLAY: ['PRACTICE_EDIT'],
   PLAY: ['RESULTS'],

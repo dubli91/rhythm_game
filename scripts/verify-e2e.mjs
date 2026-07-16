@@ -383,6 +383,163 @@ await step('Escape returns editor -> song select', async () => {
   });
 });
 
+// --- Settings screen (settings-screen.md acceptance criteria) ---
+const settingsValue = (rowKey) =>
+  page.$eval(`[data-row="${rowKey}"] .settings-value`, (n) => n.textContent);
+const settingsDoc = async () => {
+  const raw = await page.evaluate(() => localStorage.getItem('settings.v1'));
+  return raw === null ? null : JSON.parse(raw).data;
+};
+
+await step('enter settings from select (O) — song-select MUST 10', async () => {
+  await page.keyboard.press('KeyO');
+  await page.waitForSelector('[data-screen="SETTINGS"].active .settings-list', { timeout: 5000 });
+  const scratch = await settingsValue('lane-0');
+  if (!scratch.includes('ShiftLeft'))
+    throw new Error(`default scratch should be ShiftLeft: ${scratch}`);
+  await page.screenshot({ path: SHOT('16-settings') });
+});
+
+await step('key capture: conflict + reserved rejected, fresh code assigned', async () => {
+  await page.keyboard.press('Enter'); // capture on SCRATCH (focus starts at row 0)
+  if (!(await settingsValue('lane-0')).includes('PRESS A KEY'))
+    throw new Error('capture mode indicator missing');
+  await page.keyboard.press('KeyS'); // KEY 1's binding -> conflict
+  const conflictRow = await page.$eval('.settings-row.conflict', (n) => n.dataset.row);
+  if (conflictRow !== 'lane-1') throw new Error(`conflict highlight on wrong row: ${conflictRow}`);
+  let status = await page.$eval('.settings-status', (n) => n.textContent);
+  if (!status.includes('KEY 1')) throw new Error(`conflict notice should name KEY 1: ${status}`);
+  await page.keyboard.press('PageUp'); // reserved in-play control
+  status = await page.$eval('.settings-status', (n) => n.textContent);
+  if (!status.includes('reserved')) throw new Error(`reserved notice missing: ${status}`);
+  if (!(await settingsValue('lane-0')).includes('PRESS A KEY'))
+    throw new Error('rejections should keep capture mode active');
+  await page.keyboard.press('KeyZ'); // fresh -> assigned
+  if (!(await settingsValue('lane-0')).includes('KeyZ')) throw new Error('KeyZ not assigned');
+  const doc = await settingsDoc();
+  if (doc.keyMapLanes[0] !== 'KeyZ') throw new Error('rebind not persisted to settings.v1');
+  await page.screenshot({ path: SHOT('17-settings-rebound') });
+});
+
+await step('capture Escape cancels without exiting the screen', async () => {
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Escape');
+  if (!(await settingsValue('lane-0')).includes('KeyZ'))
+    throw new Error('Escape during capture should keep the current binding');
+  const active = await page.$('[data-screen="SETTINGS"].active');
+  if (active === null) throw new Error('Escape during capture must not leave the settings screen');
+});
+
+await step('offset adjusts via arrows (fine + coarse) and persists', async () => {
+  for (let i = 0; i < 9; i++) await page.keyboard.press('ArrowDown'); // to GLOBAL OFFSET row
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight'); // +3
+  await page.keyboard.press('Shift+ArrowRight'); // +13
+  const shown = await settingsValue('offset');
+  if (!shown.includes('+13ms')) throw new Error(`offset should read +13ms, got ${shown}`);
+  const doc = await settingsDoc();
+  if (doc.globalOffsetMs !== 13) throw new Error(`offset not persisted: ${doc.globalOffsetMs}`);
+});
+
+await step('music volume steps by 5% and persists', async () => {
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown'); // to MUSIC row
+  await page.keyboard.press('ArrowLeft'); // 100% -> 95%
+  const shown = await settingsValue('volume-music');
+  if (!shown.includes('95%')) throw new Error(`music volume should read 95%, got ${shown}`);
+  const doc = await settingsDoc();
+  if (doc.volumes.music !== 0.95) throw new Error(`volume not persisted: ${doc.volumes.music}`);
+});
+
+let appliedOffset = null;
+
+await step('calibration: cancel leaves offset; apply proposes + persists', async () => {
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown'); // to CALIBRATION row
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.settings-modal.visible', { timeout: 5000 });
+  await page.keyboard.press('Space'); // one tap, then cancel
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.settings-modal.visible', { state: 'hidden', timeout: 5000 });
+  let doc = await settingsDoc();
+  if (doc.globalOffsetMs !== 13) throw new Error('cancelled calibration must not change offset');
+  await page.keyboard.press('Enter'); // reopen
+  await page.waitForSelector('.settings-modal.visible', { timeout: 5000 });
+  // Taps that predate the first click by over half a period are ignored (the
+  // clicks start after a 0.5s lead-in), so wait for them and tap until done.
+  await page.waitForTimeout(700);
+  let modalText = '';
+  for (let i = 0; i < 30; i++) {
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(70);
+    modalText = await page.$eval('.settings-modal-body', (n) => n.textContent);
+    if (modalText.includes('apply as the new global offset')) break;
+  }
+  console.log(`  proposal: ${modalText}`);
+  if (!modalText.includes('apply as the new global offset'))
+    throw new Error('proposal not shown after 30 taps');
+  await page.keyboard.press('Enter'); // apply
+  await page.waitForSelector('.settings-modal.visible', { state: 'hidden', timeout: 5000 });
+  doc = await settingsDoc();
+  appliedOffset = doc.globalOffsetMs;
+  console.log(`  applied offset: ${appliedOffset}`);
+  if (!Number.isInteger(appliedOffset) || Math.abs(appliedOffset) > 200)
+    throw new Error(`applied offset out of range: ${appliedOffset}`);
+  const shown = await settingsValue('offset');
+  if (!shown.includes(`${Math.abs(appliedOffset)}ms`))
+    throw new Error(`offset row should show the applied value, got ${shown}`);
+  await page.screenshot({ path: SHOT('18-settings-calibrated') });
+});
+
+await step('Escape exits settings back to select', async () => {
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('[data-screen="SONG_SELECT"].active .song-list li.selected', {
+    timeout: 5000,
+  });
+});
+
+await step('settings persist across reload (acceptance criterion)', async () => {
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.song-list li.selected', { timeout: 8000 });
+  await page.keyboard.press('KeyO');
+  await page.waitForSelector('[data-screen="SETTINGS"].active', { timeout: 5000 });
+  if (!(await settingsValue('lane-0')).includes('KeyZ'))
+    throw new Error('rebound key lost on reload');
+  const shownOffset = await settingsValue('offset');
+  if (!shownOffset.includes(`${Math.abs(appliedOffset)}ms`))
+    throw new Error(`offset lost on reload: ${shownOffset} vs ${appliedOffset}`);
+  if (!(await settingsValue('volume-music')).includes('95%'))
+    throw new Error('music volume lost on reload');
+});
+
+await step('reset-all restores default key map', async () => {
+  for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowDown'); // to ALL KEYS row
+  await page.keyboard.press('Enter');
+  if (!(await settingsValue('lane-0')).includes('ShiftLeft'))
+    throw new Error('reset-all did not restore scratch default');
+  const doc = await settingsDoc();
+  if (doc.keyMapLanes.join(',') !== 'ShiftLeft,KeyS,KeyD,KeyF,Space,KeyJ,KeyK,KeyL')
+    throw new Error(`reset-all not persisted: ${doc.keyMapLanes}`);
+});
+
+await step('corrupt settings.v1 falls back to defaults without crashing', async () => {
+  await page.evaluate(() => localStorage.setItem('settings.v1', '{broken json!!'));
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.song-list li.selected', { timeout: 8000 });
+  await page.keyboard.press('KeyO');
+  await page.waitForSelector('[data-screen="SETTINGS"].active', { timeout: 5000 });
+  if (!(await settingsValue('lane-0')).includes('ShiftLeft'))
+    throw new Error('corrupt doc should fall back to default key map');
+  if (!(await settingsValue('offset')).includes('+0ms'))
+    throw new Error('corrupt doc should fall back to +0ms offset');
+  await page.keyboard.press('Escape'); // leave the app on select
+  await page.waitForSelector('[data-screen="SONG_SELECT"].active', { timeout: 5000 });
+  await page.screenshot({ path: SHOT('19-settings-defaults') });
+});
+
 console.log('--- console messages (last 25) ---');
 for (const m of consoleMsgs.slice(-25)) console.log(m);
 console.log('--- errors ---');

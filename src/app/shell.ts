@@ -8,7 +8,7 @@
 
 import { type PlayResult, startPlaySession } from '../features/play/controller';
 import type { ClearLamp } from '../features/play/gauge';
-import { DEFAULT_KEY_MAP, isValidKeyMap } from '../features/play/input';
+import { DEFAULT_KEY_MAP, type LaneKeyMap, isValidKeyMap } from '../features/play/input';
 import {
   ARRANGEMENTS,
   HI_SPEED_MAX,
@@ -32,10 +32,18 @@ import {
   createSelectModel,
   isSortMode,
 } from '../features/select/model';
+import type { SettingsValues } from '../features/settings/model';
+import { type SettingsScreen, createSettingsScreen } from '../features/settings/screen';
 import { type SongLibrary, loadLibrary, loadPlayableSong } from '../features/songs/library';
-import { type GameAudio, type VolumeSettings, createGameAudio } from '../lib/audio/context';
+import {
+  type GameAudio,
+  type VolumeSettings,
+  clampVolume,
+  createGameAudio,
+} from '../lib/audio/context';
 import type { SfxAudioContextLike } from '../lib/audio/sfx';
 import type { Chart, Song } from '../lib/chart/types';
+import { clampGlobalOffsetMs } from '../lib/clock/audioClock';
 import { openDatabase } from '../lib/storage/idb';
 import { type LocalDoc, STORAGE_KEYS, createLocalDoc } from '../lib/storage/local';
 import { type ScreenId, createScreenMachine } from './screens';
@@ -50,11 +58,9 @@ interface PlayOptionsDoc {
   suddenPlusCover: number;
 }
 
-interface SettingsDoc {
-  globalOffsetMs: number;
-  volumes: VolumeSettings;
-  keyMapLanes: string[];
-}
+// The settings.v1 doc shape is owned by the settings feature (single source of
+// truth) — the shell only adds the storage validator below.
+type SettingsDoc = SettingsValues;
 
 /** Select-screen preferences persisted separately from play options (song-select.md MUST 4). */
 interface SelectDoc {
@@ -151,6 +157,23 @@ const STYLES = `
   .practice-list-name { min-width: 160px; }
   .practice-list-meta { color: #8a8aa8; margin-right: auto; }
   .practice-list-empty { color: #55557a; }
+  .settings-status { min-height: 18px; color: #ffe066; font-size: 13px; margin-bottom: 6px; }
+  .settings-list { list-style: none; margin: 0; padding: 0; }
+  .settings-section { display: flex; justify-content: space-between; align-items: baseline; color: #55557a; font-size: 12px; letter-spacing: 0.14em; margin: 16px 0 4px; padding: 0 12px 4px; border-bottom: 1px solid #1c1c2e; }
+  .settings-summary { color: #8a8aa8; letter-spacing: 0.02em; }
+  .settings-row { display: flex; gap: 14px; align-items: center; padding: 6px 12px; border-left: 4px solid transparent; cursor: pointer; font-size: 14px; }
+  .settings-row.focused { background: #16182b; border-left-color: #7df3ff; }
+  .settings-row.conflict { background: #3a1020; border-left-color: #ff4455; }
+  .settings-label { min-width: 150px; color: #8a8aa8; letter-spacing: 0.06em; }
+  .settings-value { min-width: 220px; }
+  .settings-row.capturing .settings-value { color: #ffe066; animation: pulse 1.4s ease-in-out infinite; }
+  .settings-row input[type=range] { flex: 1; accent-color: #7df3ff; }
+  .settings-modal { position: fixed; inset: 0; background: #0a0a12ee; display: none; align-items: center; justify-content: center; z-index: 50; }
+  .settings-modal.visible { display: flex; }
+  .settings-modal-card { background: #10101c; border: 1px solid #2a2a44; border-radius: 8px; padding: 28px 36px; text-align: center; min-width: 380px; }
+  .settings-modal-title { color: #7df3ff; letter-spacing: 0.2em; font-size: 15px; margin-bottom: 14px; }
+  .settings-modal-body { display: grid; gap: 8px; font-size: 14px; margin-bottom: 12px; }
+  .settings-cal-count { font-size: 30px; font-weight: 800; color: #ffe066; }
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -231,14 +254,14 @@ function isSelectDoc(data: unknown): data is SelectDoc {
 function isSettingsDoc(data: unknown): data is SettingsDoc {
   if (typeof data !== 'object' || data === null) return false;
   const doc = data as Record<string, unknown>;
-  if (typeof doc.globalOffsetMs !== 'number') return false;
+  if (typeof doc.globalOffsetMs !== 'number' || !Number.isFinite(doc.globalOffsetMs)) return false;
   const volumes = doc.volumes as Record<string, unknown> | undefined;
   if (
     typeof volumes !== 'object' ||
     volumes === null ||
-    typeof volumes.master !== 'number' ||
-    typeof volumes.music !== 'number' ||
-    typeof volumes.effects !== 'number'
+    !(typeof volumes.master === 'number' && Number.isFinite(volumes.master)) ||
+    !(typeof volumes.music === 'number' && Number.isFinite(volumes.music)) ||
+    !(typeof volumes.effects === 'number' && Number.isFinite(volumes.effects))
   ) {
     return false;
   }
@@ -281,9 +304,26 @@ export function bootShell(root: HTMLElement): void {
   });
   // Spread over defaults fills fields added after the doc was stored (see validator).
   const playOptions: PlayOptionsDoc = { ...defaultPlayOptions(), ...playOptionsDoc.read() };
-  const settings = settingsDoc.read();
-  const keyMap = { lanes: settings.keyMapLanes };
-  const activeKeyMap = isValidKeyMap(keyMap) ? keyMap : DEFAULT_KEY_MAP;
+  // `settings` is the ONE live settings object: the settings screen mutates it in
+  // place and sessions read it at start, so a change applies to the very next play
+  // with no refresh (settings-screen.md MUST 11). Normalize once at boot — the
+  // validator only checks types, so a hand-edited doc could still hold an invalid
+  // key map or out-of-range numbers.
+  const settings: SettingsDoc = settingsDoc.read();
+  if (!isValidKeyMap({ lanes: settings.keyMapLanes })) {
+    settings.keyMapLanes = [...DEFAULT_KEY_MAP.lanes];
+  }
+  settings.globalOffsetMs = clampGlobalOffsetMs(Math.round(settings.globalOffsetMs));
+  settings.volumes = {
+    master: clampVolume(settings.volumes.master),
+    music: clampVolume(settings.volumes.music),
+    effects: clampVolume(settings.volumes.effects),
+  };
+  /** Read fresh at each session start so settings-screen rebinds apply immediately. */
+  function currentKeyMap(): LaneKeyMap {
+    const map = { lanes: settings.keyMapLanes };
+    return isValidKeyMap(map) ? map : DEFAULT_KEY_MAP;
+  }
 
   // --- screens ---
   const screens = new Map<ScreenId, HTMLElement>();
@@ -298,6 +338,7 @@ export function bootShell(root: HTMLElement): void {
   root.textContent = '';
   const titleEl = screenDiv('TITLE');
   const selectEl = screenDiv('SONG_SELECT');
+  const settingsEl = screenDiv('SETTINGS');
   const playEl = screenDiv('PLAY', 'screen-play');
   const practiceEditEl = screenDiv('PRACTICE_EDIT');
   const practicePlayEl = screenDiv('PRACTICE_PLAY', 'screen-play');
@@ -372,7 +413,7 @@ export function bootShell(root: HTMLElement): void {
     el(
       'div',
       'hint',
-      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · G gauge · ←/→ hi-speed · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · P practice · keys: LShift S D F Space J K L',
+      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · G gauge · ←/→ hi-speed · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · P practice · O settings · keys: LShift S D F Space J K L',
     ),
   );
 
@@ -476,6 +517,48 @@ export function bootShell(root: HTMLElement): void {
     }
   }
 
+  function saveSettings(): void {
+    try {
+      settingsDoc.write(settings);
+    } catch (err) {
+      console.error('failed to persist settings', err);
+    }
+  }
+
+  // --- SETTINGS (settings-screen.md; entry per song-select.md MUST 10) ---
+  let settingsScreen: SettingsScreen | null = null;
+
+  function ensureSettingsScreen(): SettingsScreen {
+    if (settingsScreen === null) {
+      settingsScreen = createSettingsScreen({
+        mount: settingsEl,
+        values: settings,
+        onPersist: saveSettings,
+        applyVolumes: (volumes) => gameAudio?.setVolumes(volumes),
+        getAudio: () =>
+          gameAudio === null || audioCtx === null
+            ? null
+            : {
+                sfxCtx: audioCtx as unknown as SfxAudioContextLike,
+                effectsBus: gameAudio.effectsBus,
+                clockSources: gameAudio.clockSources(),
+                getOutputLatencySec: () => audioCtx?.outputLatency,
+              },
+        onExit: () => {
+          settingsScreen?.deactivate();
+          machine.transition('SONG_SELECT');
+        },
+      });
+    }
+    return settingsScreen;
+  }
+
+  function enterSettings(): void {
+    const screen = ensureSettingsScreen();
+    machine.transition('SETTINGS');
+    screen.activate();
+  }
+
   // --- PRACTICE (practice-mode.md; entry per song-select.md MUST 10) ---
   let practiceEditor: PracticeEditor | null = null;
   let practiceBusy = false;
@@ -523,7 +606,7 @@ export function bootShell(root: HTMLElement): void {
         gameAudio,
         sfxCtx: audioCtx as unknown as SfxAudioContextLike,
         globalOffsetMs: settings.globalOffsetMs,
-        keyMap: activeKeyMap,
+        keyMap: currentKeyMap(),
         hiSpeed: playOptions.hiSpeed,
         suddenPlusEnabled: playOptions.suddenPlusEnabled,
         suddenPlusCover: playOptions.suddenPlusCover,
@@ -600,7 +683,7 @@ export function bootShell(root: HTMLElement): void {
       gameAudio,
       audioCtx: audioCtx as unknown as SongAudioContextLike,
       globalOffsetMs: settings.globalOffsetMs,
-      keyMap: activeKeyMap,
+      keyMap: currentKeyMap(),
       hiSpeed: playOptions.hiSpeed,
       arrangement: playOptions.arrangement,
       suddenPlusEnabled: playOptions.suddenPlusEnabled,
@@ -825,6 +908,9 @@ export function bootShell(root: HTMLElement): void {
       } else if (event.code === 'KeyP') {
         // Practice-session entry (song-select.md MUST 10).
         enterPracticeEditor();
+      } else if (event.code === 'KeyO') {
+        // Settings entry (song-select.md MUST 10).
+        enterSettings();
       }
       return;
     }

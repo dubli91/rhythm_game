@@ -39,7 +39,8 @@ export interface GameAudio {
 
 const DEFAULT_VOLUMES: VolumeSettings = { master: 1, music: 1, effects: 1 };
 
-function clampVolume(value: number): number {
+/** Clamp a volume to [0, 1] — the single range rule shared with the settings screen. */
+export function clampVolume(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 

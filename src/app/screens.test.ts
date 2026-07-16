@@ -5,7 +5,6 @@ const ALL_SCREENS: readonly ScreenId[] = [
   'TITLE',
   'SONG_SELECT',
   'SETTINGS',
-  'IMPORT',
   'PRACTICE_EDIT',
   'PRACTICE_PLAY',
   'PLAY',
@@ -13,7 +12,7 @@ const ALL_SCREENS: readonly ScreenId[] = [
 ];
 
 describe('ALLOWED_TRANSITIONS', () => {
-  it('is exhaustive over all 8 screens as keys', () => {
+  it('is exhaustive over all 7 screens as keys', () => {
     const keys = Object.keys(ALLOWED_TRANSITIONS).sort();
     expect(keys).toEqual([...ALL_SCREENS].sort());
   });

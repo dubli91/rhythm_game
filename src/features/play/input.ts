@@ -67,6 +67,10 @@ const CONTROL_CODES: ReadonlyMap<string, PlayControlAction> = new Map([
   ['ArrowDown', 'coverDown'],
 ]);
 
+/** Codes the settings key-config must refuse to bind to a lane (settings-screen.md
+ *  MUST 10) — derived from CONTROL_CODES so the two can never drift apart. */
+export const RESERVED_LANE_CODES: ReadonlySet<string> = new Set(CONTROL_CODES.keys());
+
 // Cover keys pass key-repeat through so holding them adjusts continuously
 // (play-options.md MUST 6); BPM keys get the same hold-to-sweep treatment in
 // practice; everything else fires once per physical press.
