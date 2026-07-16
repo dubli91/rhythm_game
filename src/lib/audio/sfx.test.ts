@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { SfxAudioContextLike, SfxBufferSourceLike } from './sfx';
-import { createSfxScheduler, synthClickBuffer } from './sfx';
+import type { MenuSfxKind, SfxAudioContextLike, SfxBufferSourceLike } from './sfx';
+import {
+  createMenuSfx,
+  createSfxScheduler,
+  synthClickBuffer,
+  synthToneSequenceBuffer,
+} from './sfx';
 
 /** Stub AudioBuffer whose getChannelData(0) is backed by a persistent Float32Array. */
 class StubAudioBuffer {
@@ -170,6 +175,125 @@ describe('synthClickBuffer', () => {
     expect(Array.from(bufferA.getChannelData(0))).not.toEqual(
       Array.from(bufferB.getChannelData(0)),
     );
+  });
+});
+
+describe('synthToneSequenceBuffer', () => {
+  it('total length is the sum of per-segment lengths', () => {
+    const ctx = new StubSfxContext({ sampleRate: 48000 });
+
+    const buffer = synthToneSequenceBuffer(ctx, [
+      { frequencyHz: 1000, durationSec: 0.05 },
+      { frequencyHz: 1500, durationSec: 0.09 },
+    ]);
+
+    expect(buffer.length).toBe(Math.round(0.05 * 48000) + Math.round(0.09 * 48000));
+  });
+
+  it('a single segment produces exactly what synthClickBuffer produces (delegation invariant)', () => {
+    const ctx = new StubSfxContext({ sampleRate: 44100 });
+
+    const viaSequence = synthToneSequenceBuffer(ctx, [
+      { frequencyHz: 1080, durationSec: 0.06, amplitude: 0.7 },
+    ]);
+    const viaClick = synthClickBuffer(ctx, {
+      frequencyHz: 1080,
+      durationSec: 0.06,
+      amplitude: 0.7,
+    });
+
+    expect(Array.from(viaSequence.getChannelData(0))).toEqual(
+      Array.from(viaClick.getChannelData(0)),
+    );
+  });
+
+  it('each segment restarts the attack envelope: the sample at a segment boundary is 0', () => {
+    const ctx = new StubSfxContext({ sampleRate: 48000 });
+
+    const buffer = synthToneSequenceBuffer(ctx, [
+      { frequencyHz: 1000, durationSec: 0.05 },
+      { frequencyHz: 1500, durationSec: 0.09 },
+    ]);
+    const data = buffer.getChannelData(0);
+    const boundary = Math.round(0.05 * 48000);
+
+    expect(data[boundary]).toBe(0);
+  });
+
+  it('peak amplitude does not exceed the loudest segment amplitude', () => {
+    const ctx = new StubSfxContext();
+
+    const buffer = synthToneSequenceBuffer(ctx, [
+      { frequencyHz: 988, durationSec: 0.05, amplitude: 0.5 },
+      { frequencyHz: 1319, durationSec: 0.09, amplitude: 0.3 },
+    ]);
+    const data = buffer.getChannelData(0);
+
+    let peak = 0;
+    for (const sample of data) {
+      peak = Math.max(peak, Math.abs(sample));
+    }
+    expect(peak).toBeLessThanOrEqual(0.5 + 1e-9);
+  });
+});
+
+describe('createMenuSfx', () => {
+  const KINDS: MenuSfxKind[] = ['move', 'confirm', 'cancel'];
+
+  it('synthesizes exactly three buffers up front and reuses them across plays', () => {
+    const ctx = new StubSfxContext();
+    const destination = {} as unknown as AudioNode;
+    const menu = createMenuSfx(ctx, destination);
+
+    expect(ctx.createdBuffers.length).toBe(3);
+
+    for (const kind of KINDS) {
+      menu.play(kind);
+      menu.play(kind);
+    }
+
+    expect(ctx.createdBuffers.length).toBe(3);
+    expect(ctx.createdSources.length).toBe(6);
+  });
+
+  it('each kind plays its own distinct buffer', () => {
+    const ctx = new StubSfxContext();
+    const destination = {} as unknown as AudioNode;
+    const menu = createMenuSfx(ctx, destination);
+
+    for (const kind of KINDS) {
+      menu.play(kind);
+    }
+
+    const played = ctx.createdSources.map((source) => source.buffer);
+    expect(new Set(played).size).toBe(3);
+  });
+
+  it('plays immediately: start is clamped to currentTime and routed to the destination', () => {
+    const ctx = new StubSfxContext({ currentTime: 7 });
+    const destination = {} as unknown as AudioNode;
+    const menu = createMenuSfx(ctx, destination);
+
+    menu.play('confirm');
+
+    const source = ctx.createdSources[0] as StubBufferSource;
+    expect(source.startCalls).toEqual([7]);
+    expect(source.connectedTargets).toEqual([destination]);
+  });
+
+  it('cancelAll stops every live cue', () => {
+    const ctx = new StubSfxContext();
+    const destination = {} as unknown as AudioNode;
+    const menu = createMenuSfx(ctx, destination);
+
+    menu.play('move');
+    menu.play('cancel');
+    menu.cancelAll();
+
+    for (const source of ctx.createdSources) {
+      expect(source.stopCalls).toEqual([0]);
+      expect(source.disconnectCallCount).toBe(1);
+    }
   });
 });
 

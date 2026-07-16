@@ -41,7 +41,12 @@ import {
   clampVolume,
   createGameAudio,
 } from '../lib/audio/context';
-import type { SfxAudioContextLike } from '../lib/audio/sfx';
+import {
+  type MenuSfx,
+  type MenuSfxKind,
+  type SfxAudioContextLike,
+  createMenuSfx,
+} from '../lib/audio/sfx';
 import type { Chart, Song } from '../lib/chart/types';
 import { clampGlobalOffsetMs } from '../lib/clock/audioClock';
 import { openDatabase } from '../lib/storage/idb';
@@ -385,12 +390,21 @@ export function bootShell(root: HTMLElement): void {
   // --- audio (created on first gesture, MUST 7) ---
   let gameAudio: GameAudio | null = null;
   let audioCtx: AudioContext | null = null;
+  let menuSfx: MenuSfx | null = null;
   async function unlockAudio(): Promise<void> {
     if (audioCtx === null) {
       audioCtx = new AudioContext();
       gameAudio = createGameAudio(audioCtx, settings.volumes);
+      // Menu move/confirm/cancel cues share the effects bus so the EFFECTS
+      // volume tier governs them like every other SFX (audio-playback.md MUST 8-9).
+      menuSfx = createMenuSfx(audioCtx as unknown as SfxAudioContextLike, gameAudio.effectsBus);
     }
     await gameAudio?.unlock();
+  }
+  // Safe before unlock: menu screens are reachable only after the title
+  // gesture, so a null kit just means silence, never an error.
+  function playMenuSfx(kind: MenuSfxKind): void {
+    menuSfx?.play(kind);
   }
 
   // --- SONG_SELECT (song-select.md MUST 1-8) ---
@@ -493,6 +507,7 @@ export function bootShell(root: HTMLElement): void {
       li.addEventListener('click', () => {
         if (selectModel === null) return;
         const play = selectModel.activateRowAt(index);
+        playMenuSfx('confirm');
         renderSelectList();
         if (play !== null) void enterPlayFromSelect(play);
       });
@@ -544,7 +559,9 @@ export function bootShell(root: HTMLElement): void {
                 clockSources: gameAudio.clockSources(),
                 getOutputLatencySec: () => audioCtx?.outputLatency,
               },
+        playMenuSfx,
         onExit: () => {
+          playMenuSfx('cancel');
           settingsScreen?.deactivate();
           machine.transition('SONG_SELECT');
         },
@@ -555,6 +572,7 @@ export function bootShell(root: HTMLElement): void {
 
   function enterSettings(): void {
     const screen = ensureSettingsScreen();
+    playMenuSfx('confirm');
     machine.transition('SETTINGS');
     screen.activate();
   }
@@ -570,6 +588,7 @@ export function bootShell(root: HTMLElement): void {
         getDb: () => db,
         onStartPractice: (pattern, targetLoops) => void startPractice(pattern, targetLoops),
         onExit: () => {
+          playMenuSfx('cancel');
           practiceEditor?.deactivate();
           machine.transition('SONG_SELECT');
         },
@@ -580,6 +599,7 @@ export function bootShell(root: HTMLElement): void {
 
   function enterPracticeEditor(): void {
     const editor = ensurePracticeEditor();
+    playMenuSfx('confirm');
     machine.transition('PRACTICE_EDIT');
     editor.activate();
   }
@@ -848,22 +868,29 @@ export function bootShell(root: HTMLElement): void {
       if (event.code === 'ArrowUp') {
         event.preventDefault();
         selectModel.moveCursor(-1);
+        playMenuSfx('move');
         renderSelectList();
       } else if (event.code === 'ArrowDown') {
         event.preventDefault();
         selectModel.moveCursor(1);
+        playMenuSfx('move');
         renderSelectList();
       } else if (event.code === 'Enter') {
         event.preventDefault();
         const play = selectModel.activate();
+        playMenuSfx('confirm');
         renderSelectList();
         if (play !== null) void enterPlayFromSelect(play);
       } else if (event.code === 'Escape') {
         // Escape backs out of the difficulty list to the song row (song-select.md MUST 5);
-        // at song level there is nowhere further back, so it does nothing.
-        if (selectModel.collapse()) renderSelectList();
+        // at song level there is nowhere further back, so it does nothing (and stays silent).
+        if (selectModel.collapse()) {
+          playMenuSfx('cancel');
+          renderSelectList();
+        }
       } else if (event.code === 'KeyS') {
         selectModel.cycleSortMode();
+        playMenuSfx('move');
         saveSelectDoc();
         renderSelectList();
       } else if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
@@ -873,21 +900,25 @@ export function bootShell(root: HTMLElement): void {
           HI_SPEED_MAX,
           Math.max(HI_SPEED_MIN, playOptions.hiSpeed + direction * HI_SPEED_STEP),
         );
+        playMenuSfx('move');
         renderOptionsBar();
         savePlayOptions();
       } else if (event.code === 'KeyG') {
         const next =
           GAUGE_TYPES[(GAUGE_TYPES.indexOf(playOptions.gaugeType) + 1) % GAUGE_TYPES.length];
         if (next !== undefined) playOptions.gaugeType = next;
+        playMenuSfx('move');
         renderOptionsBar();
         savePlayOptions();
       } else if (event.code === 'KeyR') {
         playOptions.arrangement = nextArrangement(playOptions.arrangement);
+        playMenuSfx('move');
         renderOptionsBar();
         savePlayOptions();
       } else if (event.code === 'Home') {
         event.preventDefault();
         playOptions.suddenPlusEnabled = !playOptions.suddenPlusEnabled;
+        playMenuSfx('move');
         renderOptionsBar();
         savePlayOptions();
       } else if (event.code === 'PageUp' || event.code === 'PageDown') {
@@ -898,11 +929,13 @@ export function bootShell(root: HTMLElement): void {
             playOptions.suddenPlusCover,
             event.code === 'PageUp' ? 1 : -1,
           );
+          playMenuSfx('move');
           renderOptionsBar();
           savePlayOptions();
         }
       } else if (event.code === 'KeyA') {
         playOptions.autoplay = !playOptions.autoplay;
+        playMenuSfx('move');
         renderOptionsBar();
         savePlayOptions();
       } else if (event.code === 'KeyP') {
@@ -917,9 +950,11 @@ export function bootShell(root: HTMLElement): void {
     if (screen === 'RESULTS') {
       if (event.code === 'Enter') {
         event.preventDefault();
+        playMenuSfx('confirm');
         void retryFromResults();
       } else if (event.code === 'Escape') {
         event.preventDefault();
+        playMenuSfx('cancel');
         lastResult = null;
         machine.transition('SONG_SELECT');
         renderSelectList();
@@ -954,6 +989,7 @@ export function bootShell(root: HTMLElement): void {
       renderSelectList();
       renderOptionsBar();
       machine.transition('SONG_SELECT');
+      playMenuSfx('confirm');
     } catch (err) {
       bootNote.textContent = `audio unlock failed: ${err instanceof Error ? err.message : String(err)}`;
     } finally {

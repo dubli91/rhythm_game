@@ -16,6 +16,7 @@
 
 import type { VolumeSettings } from '../../lib/audio/context';
 import {
+  type MenuSfxKind,
   type SfxAudioContextLike,
   createSfxScheduler,
   synthClickBuffer,
@@ -52,6 +53,13 @@ export interface SettingsScreenOptions {
   /** Live GainNode apply — volume changes are audible immediately (MUST 11). */
   applyVolumes(volumes: VolumeSettings): void;
   getAudio(): SettingsAudio | null;
+  /**
+   * Menu cue hook (audio-playback.md MUST 8). This screen only emits
+   * move/confirm — the cancel cue on exit belongs to the shell's onExit
+   * handler, and value adjustments stay silent (volume rows already give live
+   * audible feedback; a tick on top would double-sound them).
+   */
+  playMenuSfx?(kind: MenuSfxKind): void;
   onExit(): void;
 }
 
@@ -471,6 +479,7 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
       case 'ArrowDown':
         event.preventDefault();
         model.moveFocus(event.code === 'ArrowDown' ? 1 : -1);
+        opts.playMenuSfx?.('move');
         render();
         break;
       case 'ArrowLeft':
@@ -481,6 +490,7 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
         break;
       case 'Enter':
         event.preventDefault();
+        opts.playMenuSfx?.('confirm');
         performActivate();
         render();
         break;
