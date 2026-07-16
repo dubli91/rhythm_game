@@ -16,6 +16,8 @@ function ev(kind: JudgementKind, grade: JudgementGrade): JudgementEvent {
 const hit = (grade: JudgementGrade) => ev('hit', grade);
 const missPoor = ev('missPoor', 'POOR');
 const emptyPoor = ev('emptyPoor', 'POOR');
+const cnBreak = ev('cnBreak', 'BAD');
+const cnComplete = ev('cnComplete', 'PGREAT');
 
 describe('recovery gauges — table-exact deltas', () => {
   it('NORMAL: PGREAT/GREAT +R, GOOD +R/2, BAD -2.0, missPoor -6.0, emptyPoor -2.0', () => {
@@ -155,6 +157,40 @@ describe('survival gauges — table-exact deltas', () => {
     expect(g.value()).toBeCloseTo(88, 5);
     g.apply(emptyPoor); // 88 -> 84
     expect(g.value()).toBeCloseTo(84, 5);
+  });
+});
+
+describe('CN tail events — gauge deltas', () => {
+  it('recovery gauge: cnBreak takes the BAD decrement, cnComplete is neutral', () => {
+    const g = createGauge('NORMAL', { total: 200, noteCount: 1000 });
+    const before = g.value();
+    g.apply(cnComplete);
+    expect(g.value()).toBeCloseTo(before, 5);
+    g.apply(cnBreak);
+    expect(g.value()).toBeCloseTo(before + GAUGE_CONSTANTS.RECOVERY.NORMAL.BAD, 5);
+  });
+
+  it('survival gauge: cnBreak takes the BAD decrement, cnComplete is neutral', () => {
+    const g = createGauge('HARD', { total: 200, noteCount: 1000 });
+    g.apply(cnComplete);
+    expect(g.value()).toBeCloseTo(100, 5);
+    g.apply(cnBreak);
+    expect(g.value()).toBeCloseTo(100 + GAUGE_CONSTANTS.SURVIVAL.HARD.BAD, 5);
+  });
+
+  it('HARD <30% mitigation halves a cnBreak decrement like any other', () => {
+    const g = createGauge('HARD', { total: 200, noteCount: 1000 });
+    for (let i = 0; i < 8; i++) g.apply(missPoor); // 100 -> 20 (8th applies unmitigated at exactly 30)
+    expect(g.value()).toBeCloseTo(20, 5);
+    g.apply(cnBreak); // pre-decrement 20 < 30 -> halved: -3
+    expect(g.value()).toBeCloseTo(17, 5);
+  });
+
+  it('EX_HARD: cnBreak takes the full -12 BAD decrement (never mitigated)', () => {
+    const g = createGauge('EX_HARD', { total: 200, noteCount: 1000 });
+    for (let i = 0; i < 4; i++) g.apply(missPoor); // 100 -> 20
+    g.apply(cnBreak);
+    expect(g.value()).toBeCloseTo(20 + GAUGE_CONSTANTS.SURVIVAL.EX_HARD.BAD, 5);
   });
 });
 

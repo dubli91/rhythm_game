@@ -96,6 +96,10 @@ type RecoveryTable = typeof GAUGE_CONSTANTS.RECOVERY.NORMAL | typeof GAUGE_CONST
 function recoveryDelta(table: RecoveryTable, event: JudgementEvent, r: number): number {
   if (event.kind === 'missPoor') return table.MISS_POOR;
   if (event.kind === 'emptyPoor') return table.EMPTY_POOR;
+  // CN tail (judgement-scoring.md SHOULD 12): early release is "treated as BAD";
+  // a completed hold has no gauge effect (the head hit already recovered).
+  if (event.kind === 'cnBreak') return table.BAD;
+  if (event.kind === 'cnComplete') return 0;
   // event.kind === 'hit': grade is PGREAT | GREAT | GOOD | BAD (POOR cannot occur on a hit).
   if (event.grade === 'PGREAT') return r * table.PGREAT_R_MULT;
   if (event.grade === 'GREAT') return r * table.GREAT_R_MULT;
@@ -155,6 +159,10 @@ type SurvivalTable = typeof GAUGE_CONSTANTS.SURVIVAL.HARD | typeof GAUGE_CONSTAN
 function survivalRawDelta(table: SurvivalTable, event: JudgementEvent): number {
   if (event.kind === 'missPoor') return table.MISS_POOR;
   if (event.kind === 'emptyPoor') return table.EMPTY_POOR;
+  // CN tail: early release takes the BAD decrement (HARD <30% mitigation applies
+  // naturally since it keys off raw < 0); a completed hold is neutral.
+  if (event.kind === 'cnBreak') return table.BAD;
+  if (event.kind === 'cnComplete') return 0;
   if (event.grade === 'PGREAT') return table.PGREAT;
   if (event.grade === 'GREAT') return table.GREAT;
   if (event.grade === 'GOOD') return table.GOOD;

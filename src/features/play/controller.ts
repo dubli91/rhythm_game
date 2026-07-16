@@ -15,7 +15,14 @@ import { type ClearLamp, clearLampFor, createGauge } from './gauge';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, createPlayInput } from './input';
 import { createJudge } from './judgement';
 import { clampCover, stepCover, stepHiSpeed } from './options';
-import { NOTE_CONSUMED, NOTE_MISSED, type PlayFrameView, createPlayfieldRenderer } from './render';
+import {
+  NOTE_BROKEN,
+  NOTE_CONSUMED,
+  NOTE_HELD,
+  NOTE_MISSED,
+  type PlayFrameView,
+  createPlayfieldRenderer,
+} from './render';
 import { createScorer } from './scoring';
 import type { ScoreSummary } from './scoring';
 import { type SongAudioContextLike, createSongPlayer } from './songPlayer';
@@ -107,10 +114,19 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   );
   const timingIndex = createTimingIndex(chart.timing);
   const noteTimesMs = computeNoteTimesMs(chart);
+  // CN tail times (chart-format.md SHOULD 9): computeNoteTimesMs only converts head
+  // beats, so the controller resolves endBeat through the same timing index.
+  const noteEndTimesMs = chart.notes.map((note) =>
+    note.endBeat === undefined ? undefined : timingIndex.beatToMs(note.endBeat),
+  );
   const totalNotes = chart.notes.length;
 
   const judge = createJudge(
-    chart.notes.map((note, i) => ({ timeMs: noteTimesMs[i] ?? 0, lane: note.lane })),
+    chart.notes.map((note, i) => ({
+      timeMs: noteTimesMs[i] ?? 0,
+      lane: note.lane,
+      endTimeMs: noteEndTimesMs[i],
+    })),
   );
   const scorer = createScorer(totalNotes);
   const gauge = createGauge(opts.gaugeType, { total: chart.total, noteCount: totalNotes });
@@ -174,9 +190,21 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     scorer.apply(event);
     gauge.apply(event);
     if (event.noteIndex >= 0 && event.noteIndex < noteStates.length) {
-      noteStates[event.noteIndex] = event.kind === 'missPoor' ? NOTE_MISSED : NOTE_CONSUMED;
+      // A CN head hit parks the note in HELD until its tail resolves (cnComplete →
+      // CONSUMED, cnBreak → BROKEN so the body scrolls off dimmed).
+      noteStates[event.noteIndex] =
+        event.kind === 'missPoor'
+          ? NOTE_MISSED
+          : event.kind === 'cnBreak'
+            ? NOTE_BROKEN
+            : event.kind === 'hit' && chart.notes[event.noteIndex]?.type === 'cn'
+              ? NOTE_HELD
+              : NOTE_CONSUMED;
     }
-    lastJudgement = { grade: event.grade, kind: event.kind, atSongTimeMs: event.songTimeMs };
+    // A completed hold is silent — the head's judgement text is the note's grade.
+    if (event.kind !== 'cnComplete') {
+      lastJudgement = { grade: event.grade, kind: event.kind, atSongTimeMs: event.songTimeMs };
+    }
   }
 
   const input = createPlayInput(window, {
@@ -184,10 +212,17 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     onLane(e) {
       if (autoplay) return; // demo mode: player keys don't judge
       heldLanes[e.lane] = e.down;
-      if (!e.down || ending) return;
+      if (ending) return;
       const t = clock.eventTimeToSongTimeMs(e.timeStampMs);
       for (const miss of judge.advance(t)) dispatch(miss);
-      dispatch(judge.onInput(e.lane, t));
+      if (e.down) {
+        dispatch(judge.onInput(e.lane, t));
+      } else {
+        // CN tail resolution (judgement-scoring.md SHOULD 12); null for the common
+        // keyup-after-a-tap case, which must stay free of penalties.
+        const release = judge.onRelease(e.lane, t);
+        if (release !== null) dispatch(release);
+      }
     },
     onControl(e) {
       switch (e.action) {
@@ -293,8 +328,17 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
           if (noteTime > t) break;
           const note = chart.notes[autoplayCursor];
           if (note !== undefined && judge.noteState(autoplayCursor) === 'pending') {
+            // Resolve holds ending at/before this press first: after a frame stall the
+            // catch-up loop can press two same-lane CNs in one frame, and the second
+            // onInput would otherwise replace the first still-active hold unresolved
+            // (stuck 'held' forever). Safe re: misses — every earlier note was already
+            // pressed, and later notes have timeMs >= noteTime, outside the bad window.
+            for (const event of judge.advance(noteTime)) dispatch(event);
             dispatch(judge.onInput(note.lane, noteTime));
-            autoplayBeamUntil[note.lane] = noteTime + AUTOPLAY_BEAM_MS;
+            // Autoplay never releases: judge.advance() auto-completes the hold at its
+            // end time, so the beam stays lit through the whole CN body.
+            const beamBase = noteEndTimesMs[autoplayCursor] ?? noteTime;
+            autoplayBeamUntil[note.lane] = beamBase + AUTOPLAY_BEAM_MS;
           }
           autoplayCursor++;
         }

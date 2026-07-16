@@ -219,6 +219,9 @@ function validateNotes(raw: unknown, base: string, issues: ValidationIssue[]): v
   const seen = new Set<string>();
   let previousBeat: number | undefined;
   let sorted = true;
+  // Per-lane entries for the CN span-overlap check below. Only entries whose
+  // beat/lane (and endBeat, for cn) parsed cleanly participate.
+  const perLane = new Map<number, { beat: number; endBeat?: number; index: number }[]>();
 
   for (let i = 0; i < raw.length; i++) {
     const entry = raw[i];
@@ -258,6 +261,7 @@ function validateNotes(raw: unknown, base: string, issues: ValidationIssue[]): v
       issues.push({ path: joinPath(entryPath, 'type'), message: "type must be 'tap' or 'cn'" });
     }
 
+    let endBeat: number | undefined;
     if (isCn) {
       const endBeatRaw = entry.endBeat;
       if (!isFiniteNumber(endBeatRaw)) {
@@ -270,6 +274,8 @@ function validateNotes(raw: unknown, base: string, issues: ValidationIssue[]): v
           path: joinPath(entryPath, 'endBeat'),
           message: 'endBeat must be greater than beat',
         });
+      } else if (beat !== undefined) {
+        endBeat = endBeatRaw;
       }
     } else if (isTap) {
       if (entry.endBeat !== undefined) {
@@ -290,6 +296,13 @@ function validateNotes(raw: unknown, base: string, issues: ValidationIssue[]): v
       } else {
         seen.add(key);
       }
+
+      let laneEntries = perLane.get(lane);
+      if (laneEntries === undefined) {
+        laneEntries = [];
+        perLane.set(lane, laneEntries);
+      }
+      laneEntries.push({ beat, endBeat, index: i });
     }
 
     if (beat !== undefined) {
@@ -302,6 +315,30 @@ function validateNotes(raw: unknown, base: string, issues: ValidationIssue[]): v
 
   if (!sorted) {
     issues.push({ path: base, message: 'notes must be sorted by beat ascending' });
+  }
+
+  // CN span overlap (chart-format.md SHOULD 9): while a CN is held the lane's key is
+  // down, so no other note on that lane is playable until the tail — and the judge
+  // relies on at most one hold per lane. Rejection is INCLUSIVE of the tail beat: a
+  // note exactly at endBeat would require an instant release+repress.
+  for (const laneEntries of perLane.values()) {
+    laneEntries.sort((a, b) => a.beat - b.beat);
+    let openEndBeat: number | undefined;
+    for (const entry of laneEntries) {
+      if (openEndBeat !== undefined && entry.beat <= openEndBeat) {
+        issues.push({
+          path: `${base}[${entry.index}]`,
+          message:
+            'note overlaps an earlier cn span on the same lane (beat must be greater than that cn endBeat)',
+        });
+      }
+      if (
+        entry.endBeat !== undefined &&
+        (openEndBeat === undefined || entry.endBeat > openEndBeat)
+      ) {
+        openEndBeat = entry.endBeat;
+      }
+    }
   }
 }
 

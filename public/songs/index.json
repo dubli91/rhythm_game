@@ -47,14 +47,14 @@
           "chartId": "song-720e0160-normal",
           "difficulty": "NORMAL",
           "level": 6,
-          "noteCount": 193,
+          "noteCount": 194,
           "chartPath": "songs/song-720e0160/chart-normal.json"
         },
         {
           "chartId": "song-720e0160-hyper",
           "difficulty": "HYPER",
           "level": 8,
-          "noteCount": 331,
+          "noteCount": 333,
           "chartPath": "songs/song-720e0160/chart-hyper.json"
         }
       ],

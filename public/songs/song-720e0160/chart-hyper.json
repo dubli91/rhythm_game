@@ -3,7 +3,7 @@
   "chartId": "song-720e0160-hyper",
   "difficulty": "HYPER",
   "level": 8,
-  "total": 213,
+  "total": 213.3,
   "bpm": {
     "init": 140,
     "min": 140,
@@ -773,6 +773,18 @@
       "type": "tap"
     },
     {
+      "beat": 60,
+      "lane": 3,
+      "type": "cn",
+      "endBeat": 64
+    },
+    {
+      "beat": 60,
+      "lane": 7,
+      "type": "cn",
+      "endBeat": 64
+    },
+    {
       "beat": 64,
       "lane": 0,
       "type": "tap"
@@ -1520,7 +1532,8 @@
     {
       "beat": 96,
       "lane": 2,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 98
     },
     {
       "beat": 98,
@@ -1545,7 +1558,8 @@
     {
       "beat": 100,
       "lane": 6,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 102
     },
     {
       "beat": 102,
@@ -1570,7 +1584,8 @@
     {
       "beat": 104,
       "lane": 2,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 106
     },
     {
       "beat": 106,
@@ -1595,7 +1610,8 @@
     {
       "beat": 108,
       "lane": 6,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 110
     },
     {
       "beat": 110,
@@ -1620,7 +1636,8 @@
     {
       "beat": 112,
       "lane": 2,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 114
     },
     {
       "beat": 114,
@@ -1645,7 +1662,8 @@
     {
       "beat": 116,
       "lane": 6,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 118
     },
     {
       "beat": 118,
@@ -1670,7 +1688,8 @@
     {
       "beat": 120,
       "lane": 2,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 122
     },
     {
       "beat": 122,

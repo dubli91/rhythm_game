@@ -20,6 +20,14 @@ function emptyPoor(lane = 1, songTimeMs = 0): JudgementEvent {
   return { kind: 'emptyPoor', grade: 'POOR', lane, noteIndex: -1, deltaMs: null, songTimeMs };
 }
 
+function cnBreak(noteIndex: number, lane = 1, songTimeMs = 0): JudgementEvent {
+  return { kind: 'cnBreak', grade: 'BAD', lane, noteIndex, deltaMs: null, songTimeMs };
+}
+
+function cnComplete(noteIndex: number, lane = 1, songTimeMs = 0): JudgementEvent {
+  return { kind: 'cnComplete', grade: 'PGREAT', lane, noteIndex, deltaMs: null, songTimeMs };
+}
+
 describe('djRankFor', () => {
   it('maxExScore 0 is F', () => {
     expect(djRankFor(0, 0)).toBe('F');
@@ -101,6 +109,74 @@ describe('createScorer — combo & counts', () => {
     scorer.apply(emptyPoor());
     const snap = scorer.snapshot();
     expect(snap.bp).toBe(1 + 1 + 2);
+  });
+});
+
+describe('createScorer — CN tail events', () => {
+  it('cnBreak resets combo, adds to BP, but never touches the grade counts', () => {
+    const scorer = createScorer(2);
+    scorer.apply(hit('PGREAT', 0)); // CN head — the note's single scored judgement
+    scorer.apply(cnBreak(0));
+    scorer.apply(hit('PGREAT', 1));
+    const snap = scorer.snapshot();
+    expect(snap.combo).toBe(1); // reset by the break, rebuilt by the second hit
+    expect(snap.maxCombo).toBe(1);
+    expect(snap.cnBreakCount).toBe(1);
+    expect(snap.bp).toBe(1);
+    expect(snap.counts.BAD).toBe(0); // "treated as BAD" is penalty-only, not a count
+    expect(snap.counts.PGREAT).toBe(2); // head grade stands even after the break
+  });
+
+  it('cnBreak does not affect judgedNotes/EX: a CN is 1 note, scored at the head', () => {
+    const scorer = createScorer(1);
+    scorer.apply(hit('PGREAT', 0));
+    scorer.apply(cnBreak(0));
+    const snap = scorer.snapshot();
+    expect(snap.judgedNotes).toBe(1);
+    expect(snap.isComplete).toBe(true);
+    expect(snap.exScore).toBe(2);
+    expect(snap.maxExScore).toBe(2);
+  });
+
+  it('cnComplete is a scoring no-op', () => {
+    const scorer = createScorer(1);
+    scorer.apply(hit('GREAT', 0));
+    const before = scorer.snapshot();
+    scorer.apply(cnComplete(0));
+    const after = scorer.snapshot();
+    expect(after).toEqual(before);
+  });
+
+  it('fullCombo is killed by a cnBreak even with clean grade counts', () => {
+    const scorer = createScorer(2);
+    scorer.apply(hit('PGREAT', 0));
+    scorer.apply(cnBreak(0));
+    scorer.apply(hit('PGREAT', 1));
+    const snap = scorer.snapshot();
+    expect(snap.isComplete).toBe(true);
+    expect(snap.counts.BAD).toBe(0);
+    expect(snap.counts.POOR).toBe(0);
+    expect(snap.fullCombo).toBe(false);
+  });
+
+  it('completed holds preserve fullCombo', () => {
+    const scorer = createScorer(2);
+    scorer.apply(hit('PGREAT', 0));
+    scorer.apply(cnComplete(0));
+    scorer.apply(hit('GREAT', 1));
+    const snap = scorer.snapshot();
+    expect(snap.fullCombo).toBe(true);
+  });
+
+  it('BP arithmetic folds in cnBreak alongside BAD/missPoor/emptyPoor', () => {
+    const scorer = createScorer(3);
+    scorer.apply(hit('BAD', 0));
+    scorer.apply(missPoor(1));
+    scorer.apply(emptyPoor());
+    scorer.apply(hit('PGREAT', 2));
+    scorer.apply(cnBreak(2));
+    const snap = scorer.snapshot();
+    expect(snap.bp).toBe(4);
   });
 });
 

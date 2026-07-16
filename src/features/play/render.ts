@@ -26,10 +26,14 @@ export interface PlayRenderInit {
 }
 
 // Note display states, written by the controller each frame (parallel to chart.notes).
+// HELD/BROKEN are CN-only (playfield-rendering.md SHOULD 14): a held CN pins its head
+// to the judgement line while the body drains; a broken CN scrolls off dimmed.
 export const NOTE_PENDING = 0;
 export const NOTE_CONSUMED = 1;
 export const NOTE_MISSED = 2;
-export type NoteRenderState = 0 | 1 | 2;
+export const NOTE_HELD = 3;
+export const NOTE_BROKEN = 4;
+export type NoteRenderState = 0 | 1 | 2 | 3 | 4;
 
 export interface PlayFrameView {
   songTimeMs: number;
@@ -84,6 +88,7 @@ export const RENDER_LAYOUT = {
   PIXELS_PER_BEAT: 130,
   NOTE_HEIGHT: 13,
   NOTE_INSET: 4, // full lane width minus 4px (2px each side)
+  CN_BODY_INSET: 16, // CN body is narrower than the head chip so the chip reads as the edge
 
   // Visibility window (spec MUST 7/8): only draw a note whose y is in this range.
   CULL_TOP: -40,
@@ -132,6 +137,12 @@ const LANE_BG_B = 0x101822;
 const COLOR_SCRATCH = 0xff3344;
 const COLOR_KEY_ODD = 0xf0f0f5;
 const COLOR_KEY_EVEN = 0x3fa7ff;
+
+// CN body translucency by state (playfield-rendering.md SHOULD 14): the body uses the
+// lane color at reduced alpha; holding brightens it, breaking/missing dims it.
+const CN_BODY_ALPHA_PENDING = 0.42;
+const CN_BODY_ALPHA_HELD = 0.9;
+const CN_BODY_ALPHA_DEAD = 0.2;
 
 // Gauge fill colors.
 const GAUGE_SURVIVAL = 0xff3b4c;
@@ -206,10 +217,12 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   const canvas = app.canvas;
   mount.appendChild(canvas);
 
-  // ── Scene graph, ordered back-to-front (spec: bg < beams < notes < line < cover < HUD).
-  // The SUDDEN+ cover must occlude notes/beams (spec MUST 11) but never the HUD.
+  // ── Scene graph, ordered back-to-front (spec: bg < beams < CN bodies < notes < line
+  // < cover < HUD). CN bodies sit under head chips so the chip reads as the note edge;
+  // the SUDDEN+ cover must occlude notes/beams (spec MUST 11) but never the HUD.
   const bgContainer = new Container();
   const beamContainer = new Container();
+  const bodyContainer = new Container();
   const notesContainer = new Container();
   const lineContainer = new Container();
   const coverContainer = new Container();
@@ -217,6 +230,7 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   app.stage.addChild(
     bgContainer,
     beamContainer,
+    bodyContainer,
     notesContainer,
     lineContainer,
     coverContainer,
@@ -295,6 +309,18 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     }
   }
   growPool(L.INITIAL_NOTE_POOL);
+
+  // CN body pool (spec SHOULD 14): one stretched sprite per visible hold span.
+  const bodyPool: Sprite[] = [];
+  function growBodyPool(target: number): void {
+    while (bodyPool.length < target) {
+      const s = new Sprite(Texture.WHITE);
+      s.visible = false;
+      bodyContainer.addChild(s);
+      bodyPool.push(s);
+    }
+  }
+  growBodyPool(8);
 
   // ── HUD text ──────────────────────────────────────────────────────────────
   const titleText = new Text({
@@ -442,6 +468,7 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   // ── Per-frame state caches (avoid rebuilding strings / re-culling from 0) ───
   let firstLiveNote = 0;
   let lastUsedSprites = 0;
+  let lastUsedBodies = 0;
   let lastExScore = -1;
   let lastBpmShown = Number.NaN;
   let lastHiSpeedShown = Number.NaN;
@@ -466,8 +493,10 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     const states = view.noteStates;
     const n = notes.length;
 
-    // Advance the live cursor: skip notes that are consumed forever, or missed
-    // notes that have already scrolled below the screen (spec MUST 7/8).
+    // Advance the live cursor: skip notes that are consumed forever, or missed/broken
+    // notes that have already scrolled below the screen (spec MUST 7/8). A CN is only
+    // gone once its TAIL (endBeat, the body top) passes the bottom edge; a HELD CN
+    // always blocks the cursor (it resolves to consumed/broken shortly).
     while (firstLiveNote < n) {
       const s = states[firstLiveNote];
       if (s === undefined) break;
@@ -475,9 +504,12 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
         firstLiveNote++;
         continue;
       }
-      if (s === NOTE_MISSED) {
+      if (s === NOTE_MISSED || s === NOTE_BROKEN) {
         const note = notes[firstLiveNote];
-        if (note !== undefined && noteY(note.beat, currentBeat, hiSpeed) > L.CULL_BOTTOM) {
+        if (
+          note !== undefined &&
+          noteY(note.endBeat ?? note.beat, currentBeat, hiSpeed) > L.CULL_BOTTOM
+        ) {
           firstLiveNote++;
           continue;
         }
@@ -485,25 +517,63 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
       break;
     }
 
-    // Assign visible notes to pool sprites. Notes are ascending by beat, so y
-    // decreases as we advance — once above the top edge, all later notes are too.
+    // Assign visible notes to pool sprites. Notes are ascending by (head) beat, so
+    // head y decreases as we advance — once a head is above the top edge, all later
+    // notes are too (a CN body only ever extends further UP from its head).
     let used = 0;
+    let usedBodies = 0;
     for (let i = firstLiveNote; i < n; i++) {
       const s = states[i];
       if (s === undefined || s === NOTE_CONSUMED) continue;
       const note = notes[i];
       if (note === undefined) continue;
-      const y = noteY(note.beat, currentBeat, hiSpeed);
-      if (y > L.CULL_BOTTOM) continue;
-      if (y < L.CULL_TOP) break;
+      const headY = noteY(note.beat, currentBeat, hiSpeed);
+      if (headY < L.CULL_TOP) break;
       const lx = lane.x[note.lane];
       const lw = lane.w[note.lane];
       if (lx === undefined || lw === undefined) continue;
+
+      let chipY = headY;
+      let drawChip = true;
+      if (note.endBeat !== undefined) {
+        // CN (spec SHOULD 14): body spans tail (top) → head (bottom). While held the
+        // body drains into the judgement line and the head chip pins there; once
+        // broken only the dimmed body scrolls off (the head hit consumed the chip).
+        const tailY = noteY(note.endBeat, currentBeat, hiSpeed);
+        if (tailY > L.CULL_BOTTOM) continue; // whole hold is below the screen
+        const held = s === NOTE_HELD;
+        const bodyBottom = Math.min(held ? L.JUDGEMENT_LINE_Y : headY, L.CULL_BOTTOM);
+        const bodyTop = Math.max(tailY, L.CULL_TOP);
+        if (bodyBottom > bodyTop) {
+          if (usedBodies >= bodyPool.length) growBodyPool(bodyPool.length * 2);
+          const body = bodyPool[usedBodies];
+          if (body !== undefined) {
+            body.x = lx + L.CN_BODY_INSET / 2;
+            body.y = bodyTop;
+            body.width = lw - L.CN_BODY_INSET;
+            body.height = bodyBottom - bodyTop;
+            body.tint = laneColor(note.lane);
+            body.alpha = held
+              ? CN_BODY_ALPHA_HELD
+              : s === NOTE_PENDING
+                ? CN_BODY_ALPHA_PENDING
+                : CN_BODY_ALPHA_DEAD;
+            body.visible = true;
+            usedBodies++;
+          }
+        }
+        if (held) chipY = L.JUDGEMENT_LINE_Y;
+        drawChip = s !== NOTE_BROKEN && chipY <= L.CULL_BOTTOM;
+      } else if (headY > L.CULL_BOTTOM) {
+        continue;
+      }
+
+      if (!drawChip) continue;
       if (used >= notePool.length) growPool(notePool.length * 2);
       const spr = notePool[used];
       if (spr === undefined) continue;
       spr.x = lx + L.NOTE_INSET / 2;
-      spr.y = y - L.NOTE_HEIGHT / 2;
+      spr.y = chipY - L.NOTE_HEIGHT / 2;
       spr.width = lw - L.NOTE_INSET;
       spr.tint = laneColor(note.lane);
       spr.visible = true;
@@ -514,6 +584,11 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
       if (spr !== undefined) spr.visible = false;
     }
     lastUsedSprites = used;
+    for (let k = usedBodies; k < lastUsedBodies; k++) {
+      const body = bodyPool[k];
+      if (body !== undefined) body.visible = false;
+    }
+    lastUsedBodies = usedBodies;
 
     // Key beams (spec MUST 9).
     for (let i = 0; i <= 7; i++) {

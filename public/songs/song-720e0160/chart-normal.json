@@ -3,7 +3,7 @@
   "chartId": "song-720e0160-normal",
   "difficulty": "NORMAL",
   "level": 6,
-  "total": 190.9,
+  "total": 191,
   "bpm": {
     "init": 140,
     "min": 140,
@@ -426,6 +426,12 @@
       "beat": 59,
       "lane": 1,
       "type": "tap"
+    },
+    {
+      "beat": 60,
+      "lane": 7,
+      "type": "cn",
+      "endBeat": 64
     },
     {
       "beat": 64,
@@ -915,7 +921,8 @@
     {
       "beat": 96,
       "lane": 2,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 98
     },
     {
       "beat": 98,
@@ -940,7 +947,8 @@
     {
       "beat": 104,
       "lane": 2,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 106
     },
     {
       "beat": 106,
@@ -965,7 +973,8 @@
     {
       "beat": 112,
       "lane": 2,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 114
     },
     {
       "beat": 114,
@@ -990,7 +999,8 @@
     {
       "beat": 120,
       "lane": 2,
-      "type": "tap"
+      "type": "cn",
+      "endBeat": 122
     },
     {
       "beat": 122,

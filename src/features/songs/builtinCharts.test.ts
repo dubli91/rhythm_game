@@ -221,6 +221,33 @@ describe('built-in content coverage (builtin-song-content.md MUST 1-4)', () => {
     expect(noteOnStop, 'showcase chart has no note exactly on a STOP beat').toBe(true);
   });
 
+  it('ships a CN showcase: >=1 song charts cn notes, incl. a tail exactly ON a STOP beat (SHOULD 15)', () => {
+    const allCharts = catalog.songs.flatMap((song) =>
+      song.charts.map((entry) => loadChartAt(entry.chartPath)),
+    );
+    const cnCharts = allCharts.filter((chart) => chart.notes.some((note) => note.type === 'cn'));
+    expect(cnCharts.length, 'no shipped chart contains a cn note').toBeGreaterThanOrEqual(1);
+
+    // Every shipped CN must resolve BOTH ends through the timing index (this is
+    // what the play controller does at session start), and a tail landing exactly
+    // ON a STOP beat must resolve to the STOP's start time — the same-beat rule
+    // (timing.ts control-point semantics) applied to tails, pinned in content.
+    let tailOnStop = false;
+    for (const chart of cnCharts) {
+      const index = createTimingIndex(chart.timing);
+      const stopBeats = new Set(chart.timing.stopEvents.map((event) => event.beat));
+      for (const note of chart.notes) {
+        if (note.type !== 'cn' || note.endBeat === undefined) continue;
+        const headMs = index.beatToMs(note.beat);
+        const tailMs = index.beatToMs(note.endBeat);
+        expect(Number.isFinite(tailMs)).toBe(true);
+        expect(tailMs).toBeGreaterThan(headMs);
+        if (stopBeats.has(note.endBeat)) tailOnStop = true;
+      }
+    }
+    expect(tailOnStop, 'no shipped cn tail lands exactly on a STOP beat').toBe(true);
+  });
+
   it('chart bpm metadata matches bpmEvents and the catalog bpm range spans the charts', () => {
     for (const song of catalog.songs) {
       let songMin = Number.POSITIVE_INFINITY;

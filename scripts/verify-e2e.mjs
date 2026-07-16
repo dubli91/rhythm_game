@@ -264,12 +264,20 @@ const playSmoke = async (title, difficulty, seconds) => {
   await page.keyboard.press('Escape'); // back to select
   await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
   await page.keyboard.press('Escape'); // collapse so the next navigate starts clean
+  return grid;
 };
 
 await step(
-  'play smoke: Neon Cascade NORMAL (BPM-change/STOP chart) loads + autoplays',
+  'play smoke: Neon Cascade NORMAL (BPM-change/STOP + CN chart) loads + autoplays through the riser CN',
   async () => {
-    await playSmoke('Neon Cascade', 'NORMAL', 10);
+    // 30s reaches past the riser CN (head at beat 60 ≈ 26.7s incl. 1s lead-in) whose
+    // held body crosses the STOP + BPM change, and the hold auto-completes at the
+    // tail. Autoplay never releases, so ANY BAD/POOR/BP here means the CN pipeline
+    // (head judgement, hold auto-complete, or renderer during the frozen scroll)
+    // broke — a cnBreak would surface in the BP row.
+    const grid = await playSmoke('Neon Cascade', 'NORMAL', 30);
+    if (!grid.includes('BAD0POOR (miss)0POOR (empty)0BP0'))
+      throw new Error(`CN-chart autoplay produced non-clean counts: ${grid}`);
     await page.screenshot({ path: SHOT('9-neon-smoke') });
   },
 );

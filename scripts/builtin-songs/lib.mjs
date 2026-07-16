@@ -395,6 +395,15 @@ export function addNote(notes, seen, beat, lane, type = 'tap') {
   return true;
 }
 
+/** Adds a CN (charge note) spanning [beat, endBeat]; same (lane,beat) dedupe as addNote. */
+export function addCnNote(notes, seen, beat, endBeat, lane) {
+  const key = `${lane}:${beat}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  notes.push({ beat, lane, type: 'cn', endBeat });
+  return true;
+}
+
 // --- sanity assertions (fail loudly rather than silently shipping bad content) --
 
 export function assertChartInvariants(
@@ -415,6 +424,9 @@ export function assertChartInvariants(
     throw new Error(`${label}: last note at beat ${last.beat} is after ${lastNoteMaxBeat}`);
   }
   const seen = new Set();
+  // Mirrors src/lib/chart/validate.ts CN rules: endBeat > beat, and no same-lane
+  // note at beat <= an earlier CN's endBeat (a held key can't play another note).
+  const laneOpenEnd = new Map();
   let prevBeat = Number.NEGATIVE_INFINITY;
   for (const n of notes) {
     if (n.beat < prevBeat) {
@@ -432,6 +444,24 @@ export function assertChartInvariants(
       throw new Error(`${label}: duplicate (lane,beat) at ${key}`);
     }
     seen.add(key);
+
+    if (n.type === 'cn') {
+      if (!(Number.isFinite(n.endBeat) && n.endBeat > n.beat)) {
+        throw new Error(`${label}: cn at ${key} needs endBeat > beat (got ${n.endBeat})`);
+      }
+      if (n.endBeat >= totalBeats) {
+        throw new Error(`${label}: cn at ${key} endBeat ${n.endBeat} out of range`);
+      }
+    } else if (n.endBeat !== undefined) {
+      throw new Error(`${label}: tap at ${key} must not carry endBeat`);
+    }
+    const openEnd = laneOpenEnd.get(n.lane);
+    if (openEnd !== undefined && n.beat <= openEnd) {
+      throw new Error(`${label}: note at ${key} overlaps a cn span ending at beat ${openEnd}`);
+    }
+    if (n.type === 'cn' && (openEnd === undefined || n.endBeat > openEnd)) {
+      laneOpenEnd.set(n.lane, n.endBeat);
+    }
   }
 }
 

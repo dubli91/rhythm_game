@@ -8,15 +8,19 @@ export interface ScoreSummary {
   // counts.POOR = missPoor count ONLY; empty poors are tracked separately in emptyPoorCount.
   counts: Record<JudgementGrade, number>;
   emptyPoorCount: number;
+  /** CN tails released early ("treated as BAD" — judgement-scoring.md SHOULD 12).
+   *  Tracked outside counts so a CN stays 1 scored note; contributes to BP and kills FC. */
+  cnBreakCount: number;
   combo: number;
   maxCombo: number;
   exScore: number;
   maxExScore: number;
   exPercent: number;
-  // BP = BAD + missPoor POOR + emptyPoor (IIDX convention: empty poors count toward BP).
+  // BP = BAD + missPoor POOR + emptyPoor + cnBreak (empty poors count toward BP per IIDX).
   bp: number;
   djRank: DjRank;
-  // true only when isComplete && zero BAD && zero missPoor. Empty poors do not break FC.
+  // true only when isComplete && zero BAD && zero missPoor && zero cnBreak.
+  // Empty poors do not break FC.
   fullCombo: boolean;
   judgedNotes: number;
   totalNotes: number;
@@ -57,6 +61,7 @@ function emptyCounts(): Record<JudgementGrade, number> {
 export function createScorer(totalNotes: number): Scorer {
   const counts = emptyCounts();
   let emptyPoorCount = 0;
+  let cnBreakCount = 0;
   let combo = 0;
   let maxCombo = 0;
   let judgedNotes = 0;
@@ -76,6 +81,16 @@ export function createScorer(totalNotes: number): Scorer {
       return;
     }
 
+    // CN tail events: the head already scored the note (judgedNotes/EX untouched here).
+    if (event.kind === 'cnBreak') {
+      cnBreakCount++;
+      combo = 0;
+      return;
+    }
+    if (event.kind === 'cnComplete') {
+      return;
+    }
+
     // kind === 'hit'
     counts[event.grade]++;
     judgedNotes++;
@@ -92,13 +107,14 @@ export function createScorer(totalNotes: number): Scorer {
   function snapshot(): ScoreSummary {
     const exScore = counts.PGREAT * 2 + counts.GREAT;
     const exPercent = maxExScore === 0 ? 0 : (exScore / maxExScore) * 100;
-    const bp = counts.BAD + counts.POOR + emptyPoorCount;
+    const bp = counts.BAD + counts.POOR + emptyPoorCount + cnBreakCount;
     const isComplete = judgedNotes === totalNotes;
-    const fullCombo = isComplete && counts.BAD === 0 && counts.POOR === 0;
+    const fullCombo = isComplete && counts.BAD === 0 && counts.POOR === 0 && cnBreakCount === 0;
 
     return {
       counts: { ...counts },
       emptyPoorCount,
+      cnBreakCount,
       combo,
       maxCombo,
       exScore,

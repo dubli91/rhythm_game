@@ -179,6 +179,131 @@ describe('createJudge — autoplay simulation', () => {
   });
 });
 
+describe('createJudge — CN (charge notes)', () => {
+  // Head at 1000ms, tail at 2000ms; end window opens at 2000 − good (±116.67ms end
+  // window per judgement-scoring.md SHOULD 12).
+  const cn: JudgeNote[] = [{ timeMs: 1000, lane: 1, endTimeMs: 2000 }];
+
+  it('head hit is judged like a tap and parks the note in held', () => {
+    const judge = createJudge(cn);
+    const head = judge.onInput(1, 1016);
+    expect(head.kind).toBe('hit');
+    expect(head.grade).toBe('PGREAT');
+    expect(head.deltaMs).toBe(16);
+    expect(head.noteIndex).toBe(0);
+    expect(judge.noteState(0)).toBe('held');
+    // The head is the note's single scored judgement: remaining drops immediately.
+    expect(judge.remainingNotes()).toBe(0);
+  });
+
+  it('release inside the end window is cnComplete and resolves the note to hit', () => {
+    const judge = createJudge(cn);
+    judge.onInput(1, 1000);
+    const release = judge.onRelease(1, 2000 - DEFAULT_JUDGEMENT_WINDOWS_MS.good);
+    expect(release?.kind).toBe('cnComplete');
+    expect(release?.noteIndex).toBe(0);
+    expect(judge.noteState(0)).toBe('hit');
+  });
+
+  it('release before the end window opens is cnBreak with grade BAD', () => {
+    const judge = createJudge(cn);
+    judge.onInput(1, 1000);
+    const release = judge.onRelease(1, 2000 - DEFAULT_JUDGEMENT_WINDOWS_MS.good - 1);
+    expect(release?.kind).toBe('cnBreak');
+    expect(release?.grade).toBe('BAD');
+    expect(release?.noteIndex).toBe(0);
+    expect(judge.noteState(0)).toBe('broken');
+  });
+
+  it('holding through the end auto-completes via advance() at endTimeMs', () => {
+    const judge = createJudge(cn);
+    judge.onInput(1, 1000);
+    const events = judge.advance(2500);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe('cnComplete');
+    expect(events[0]?.songTimeMs).toBe(2000);
+    expect(judge.noteState(0)).toBe('hit');
+    // A later release finds no active hold (keyup after completion is free).
+    expect(judge.onRelease(1, 2600)).toBeNull();
+  });
+
+  it('a missed head never opens a hold: one note, one missPoor', () => {
+    const judge = createJudge(cn);
+    const events = judge.advance(1000 + DEFAULT_JUDGEMENT_WINDOWS_MS.bad + 1);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe('missPoor');
+    expect(judge.noteState(0)).toBe('missed');
+    // Advancing past the tail produces nothing more.
+    expect(judge.advance(3000)).toHaveLength(0);
+    expect(judge.onRelease(1, 2000)).toBeNull();
+  });
+
+  it('release with no active hold returns null (keyup after a tap is free)', () => {
+    const notes: JudgeNote[] = [{ timeMs: 1000, lane: 1 }];
+    const judge = createJudge(notes);
+    judge.onInput(1, 1000);
+    expect(judge.onRelease(1, 1050)).toBeNull();
+  });
+
+  it('release exactly at the end-window edge (endTimeMs − good) succeeds inclusively', () => {
+    const judge = createJudge(cn);
+    judge.onInput(1, 1000);
+    // Float-arithmetic form of the edge: BOUNDARY_EPSILON must absorb the drift.
+    const edge = 2000 - DEFAULT_JUDGEMENT_WINDOWS_MS.good;
+    const release = judge.onRelease(1, edge);
+    expect(release?.kind).toBe('cnComplete');
+  });
+
+  it('holds are independent per lane', () => {
+    const notes: JudgeNote[] = [
+      { timeMs: 1000, lane: 1, endTimeMs: 2000 },
+      { timeMs: 1000, lane: 2, endTimeMs: 2000 },
+    ];
+    const judge = createJudge(notes);
+    judge.onInput(1, 1000);
+    judge.onInput(2, 1000);
+    const breakEvent = judge.onRelease(1, 1200);
+    expect(breakEvent?.kind).toBe('cnBreak');
+    expect(breakEvent?.noteIndex).toBe(0);
+    expect(judge.noteState(1)).toBe('held');
+    const complete = judge.onRelease(2, 2000);
+    expect(complete?.kind).toBe('cnComplete');
+    expect(complete?.noteIndex).toBe(1);
+  });
+
+  it('after a cnBreak, a later note on the same lane is still judgeable', () => {
+    const notes: JudgeNote[] = [
+      { timeMs: 1000, lane: 1, endTimeMs: 2000 },
+      { timeMs: 2500, lane: 1 },
+    ];
+    const judge = createJudge(notes);
+    judge.onInput(1, 1000);
+    judge.onRelease(1, 1100); // break
+    const next = judge.onInput(1, 2500);
+    expect(next.kind).toBe('hit');
+    expect(next.noteIndex).toBe(1);
+    expect(next.grade).toBe('PGREAT');
+  });
+
+  it('press-only autoplay on a CN chart yields PGREAT head + auto cnComplete (no break)', () => {
+    const notes: JudgeNote[] = [
+      { timeMs: 1000, lane: 1, endTimeMs: 2000 },
+      { timeMs: 2500, lane: 1, endTimeMs: 3000 },
+    ];
+    const judge = createJudge(notes);
+    // Frame loop: advance() runs before each press (controller ordering).
+    expect(judge.advance(1000)).toHaveLength(0);
+    expect(judge.onInput(1, 1000).grade).toBe('PGREAT');
+    const mid = judge.advance(2500);
+    expect(mid.map((e) => e.kind)).toEqual(['cnComplete']);
+    expect(judge.onInput(1, 2500).grade).toBe('PGREAT');
+    const end = judge.advance(4000);
+    expect(end.map((e) => e.kind)).toEqual(['cnComplete']);
+    expect(judge.noteState(0)).toBe('hit');
+    expect(judge.noteState(1)).toBe('hit');
+  });
+});
+
 describe('createJudge — custom windows', () => {
   it('accepts a custom JudgementWindowsMs override', () => {
     const notes: JudgeNote[] = [{ timeMs: 1000, lane: 1 }];

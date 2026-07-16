@@ -7,12 +7,22 @@ export type JudgementGrade = 'PGREAT' | 'GREAT' | 'GOOD' | 'BAD' | 'POOR';
 /**
  * hit = an input consumed a note; missPoor = a note passed the late BAD edge unjudged;
  * emptyPoor = an input with no note in window (gauge damage, no combo break).
+ *
+ * CN tail events (judgement-scoring.md SHOULD 12). The HEAD hit is the note's single
+ * scored judgement (a CN counts as 1 note — see noteCount()); the tail only ever
+ * downgrades the outcome:
+ *   cnBreak    = released before the end window opened — "treated as BAD": combo
+ *                reset + gauge BAD delta + BP, but NOT added to the grade counts
+ *                (same extra-event precedent as emptyPoor, so maxEX stays notes×2).
+ *   cnComplete = tail resolved successfully (released inside the ±GOOD end window,
+ *                or still held when the end passed). No scoring/gauge effect.
  */
-export type JudgementKind = 'hit' | 'missPoor' | 'emptyPoor';
+export type JudgementKind = 'hit' | 'missPoor' | 'emptyPoor' | 'cnBreak' | 'cnComplete';
 
 export interface JudgementEvent {
   kind: JudgementKind;
-  /** missPoor and emptyPoor always carry grade 'POOR'. */
+  /** missPoor and emptyPoor always carry grade 'POOR'; cnBreak carries 'BAD';
+   *  cnComplete carries 'PGREAT' (cosmetic only — never scored or displayed). */
   grade: JudgementGrade;
   /** 0 = scratch, 1..7 = keys. */
   lane: number;

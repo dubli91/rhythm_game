@@ -6,6 +6,11 @@
 // clock semantics as src/lib/chart/timing.ts, so chart timing and audible
 // events stay in sync across the tempo map.
 //
+// Also the CN showcase (builtin-song-content.md SHOULD 15): the beats 60-64
+// riser charts as a held CN ending exactly ON the STOP beat, and the outro's
+// sustained 2-beat bass notes chart as CNs — both were already sustained
+// sounds, so the CNs add no audio changes.
+//
 // Structure (beats, 4/4):
 //   0-16    intro: pad + downbeat kicks
 //   16-48   groove @140: four-on-floor, offbeat hats, 2-bar bass cycle, snares
@@ -18,6 +23,7 @@
 
 import {
   SAMPLE_RATE,
+  addCnNote,
   addMono,
   addNote,
   addSustainedPad,
@@ -230,7 +236,17 @@ function melodyLane(noteName, fallbackIndex) {
 }
 
 function buildNotes(
-  { kickStride, snareStride, hatStride, bassStride, arpStride, leadStride, sixteenths, addChords },
+  {
+    kickStride,
+    snareStride,
+    hatStride,
+    bassStride,
+    arpStride,
+    leadStride,
+    sixteenths,
+    addChords,
+    riserCnLanes,
+  },
   { kickBeats, snareBeats, hatBeats, bassEvents, arpEvents, leadEvents },
 ) {
   const notes = [];
@@ -257,7 +273,14 @@ function buildNotes(
     .filter((ev) => ev.accent)
     .forEach((ev, i) => {
       if (i % bassStride !== 0) return;
-      addNote(notes, seen, ev.beat, bassLane(i));
+      // Sustained outro bass (dur >= 2 beats) charts as a CN over its full length —
+      // the shipped CN showcase (builtin-song-content.md SHOULD 15). The audio for
+      // these events was already a held bass tone, so no synthesis change is needed.
+      if (ev.dur >= 2) {
+        addCnNote(notes, seen, ev.beat, ev.beat + ev.dur, bassLane(i));
+      } else {
+        addNote(notes, seen, ev.beat, bassLane(i));
+      }
     });
 
   arpEvents.forEach((ev, i) => {
@@ -280,6 +303,14 @@ function buildNotes(
   // exactly AT the stop beat pins the "note at a STOP's beat sounds when the
   // STOP begins" rule into shipped content.
   addNote(notes, seen, DROP_BEAT, 0);
+
+  // The riser (beats 60-64) charts as a held CN whose TAIL lands exactly ON the
+  // STOP beat — the tail time resolves to the instant the STOP begins, pinning
+  // the same same-beat timing rule for CN tails. Beats 60-64 are otherwise empty
+  // ("riser only" section), so the hold can't collide with any lane.
+  for (const lane of riserCnLanes) {
+    addCnNote(notes, seen, 60, DROP_BEAT, lane);
+  }
 
   notes.sort((a, b) => a.beat - b.beat || a.lane - b.lane);
   return notes;
@@ -402,6 +433,7 @@ export function buildNeonCascade() {
         leadStride: 1,
         sixteenths: false,
         addChords: false,
+        riserCnLanes: [7],
       },
       events,
     ),
@@ -420,6 +452,7 @@ export function buildNeonCascade() {
         leadStride: 1,
         sixteenths: true,
         addChords: true,
+        riserCnLanes: [3, 7],
       },
       events,
     ),
@@ -471,8 +504,8 @@ export function buildNeonCascade() {
     ],
     wav,
     summary: [
-      `chartId (normal): ${CHART_ID_NORMAL}  notes=${chartNormal.notes.length}  total=${chartNormal.total}`,
-      `chartId (hyper):  ${CHART_ID_HYPER}  notes=${chartHyper.notes.length}  total=${chartHyper.total}`,
+      `chartId (normal): ${CHART_ID_NORMAL}  notes=${chartNormal.notes.length}  total=${chartNormal.total}  cn=${chartNormal.notes.filter((n) => n.type === 'cn').length}`,
+      `chartId (hyper):  ${CHART_ID_HYPER}  notes=${chartHyper.notes.length}  total=${chartHyper.total}  cn=${chartHyper.notes.filter((n) => n.type === 'cn').length}`,
       `bpm map: 140 -> 175 @ beat ${DROP_BEAT} (with ${STOP_BEATS}-beat STOP) -> 140 @ beat ${OUTRO_BEAT}`,
       `audio: ${MUSIC_SECONDS.toFixed(3)}s music + ${TAIL_SECONDS}s tail, ${wav.length} bytes`,
       `normalized peak: ${measuredPeak.toFixed(6)}`,
