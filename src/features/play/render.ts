@@ -19,6 +19,10 @@ export interface PlayRenderInit {
   mount: HTMLElement;
   chart: Chart;
   songTitle: string;
+  /** 'practice' swaps the gauge widgets for a stats text block — practice has no
+   *  gauge (practice-mode.md MUST 7) but reuses this renderer so play feel is
+   *  identical. Defaults to 'song'. */
+  hud?: 'song' | 'practice';
 }
 
 // Note display states, written by the controller each frame (parallel to chart.notes).
@@ -41,10 +45,13 @@ export interface PlayFrameView {
   heldLanes: readonly boolean[];
   /** Parallel to chart.notes. */
   noteStates: Uint8Array;
-  gauge: { type: GaugeType; value: number; clearLine: number; isSurvival: boolean };
+  /** null in practice mode (no gauge — practice-mode.md MUST 7). */
+  gauge: { type: GaugeType; value: number; clearLine: number; isSurvival: boolean } | null;
   combo: number;
   exScore: number;
   lastJudgement: { grade: JudgementGrade; kind: JudgementKind; atSongTimeMs: number } | null;
+  /** Multi-line stats block for the practice HUD; ignored by the song HUD. */
+  infoText?: string;
   /** SUDDEN+ cover over the top of the lanes (spec MUST 11, play-options.md MUST 5-7). */
   suddenPlusEnabled: boolean;
   /** Cover height as % of the scroll area above the judgement line (0..80). */
@@ -108,6 +115,10 @@ export const RENDER_LAYOUT = {
   EX_SCORE_Y: 80,
   BPM_Y: 130,
   HISPEED_Y: 160,
+
+  // Practice stats block (right of the playfield, clear of the HUD panel).
+  INFO_X: 660,
+  INFO_Y: 210,
 
   INITIAL_NOTE_POOL: 64,
 } as const;
@@ -174,6 +185,7 @@ function gradeColor(grade: JudgementGrade): number {
 export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<PlayfieldRenderer> {
   const L = RENDER_LAYOUT;
   const { mount, chart, songTitle } = init;
+  const hudMode = init.hud ?? 'song';
   const notes: readonly Note[] = chart.notes;
   const lane = computeLaneGeometry();
   const playfieldRight =
@@ -317,34 +329,50 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   hiSpeedText.y = L.HISPEED_Y;
   hudContainer.addChild(hiSpeedText);
 
-  const gaugePctText = new Text({
-    text: '0.0%',
-    style: { fill: 0xffffff, fontFamily: 'Arial', fontSize: 20, fontWeight: 'bold' },
-  });
-  gaugePctText.x = L.GAUGE_X + L.GAUGE_WIDTH + 10;
-  gaugePctText.y = L.GAUGE_Y + 2;
-  hudContainer.addChild(gaugePctText);
+  // Gauge widgets exist only on the song HUD; practice has no gauge
+  // (practice-mode.md MUST 7) and shows a stats block instead.
+  let gaugePctText: Text | null = null;
+  let gaugeFill: Sprite | null = null;
+  let clearTick: Sprite | null = null;
+  let infoText: Text | null = null;
+  if (hudMode === 'song') {
+    gaugePctText = new Text({
+      text: '0.0%',
+      style: { fill: 0xffffff, fontFamily: 'Arial', fontSize: 20, fontWeight: 'bold' },
+    });
+    gaugePctText.x = L.GAUGE_X + L.GAUGE_WIDTH + 10;
+    gaugePctText.y = L.GAUGE_Y + 2;
+    hudContainer.addChild(gaugePctText);
 
-  // Gauge track (static) + fill sprite + clear-line tick.
-  const gaugeTrack = new Graphics();
-  gaugeTrack.rect(L.GAUGE_X, L.GAUGE_Y, L.GAUGE_WIDTH, L.GAUGE_HEIGHT).fill(0x1a1e2a);
-  hudContainer.addChild(gaugeTrack);
+    // Gauge track (static) + fill sprite + clear-line tick.
+    const gaugeTrack = new Graphics();
+    gaugeTrack.rect(L.GAUGE_X, L.GAUGE_Y, L.GAUGE_WIDTH, L.GAUGE_HEIGHT).fill(0x1a1e2a);
+    hudContainer.addChild(gaugeTrack);
 
-  const gaugeFill = new Sprite(Texture.WHITE);
-  gaugeFill.x = L.GAUGE_X;
-  gaugeFill.y = L.GAUGE_Y;
-  gaugeFill.height = L.GAUGE_HEIGHT;
-  gaugeFill.width = 0;
-  gaugeFill.tint = GAUGE_RECOVERY_LOW;
-  hudContainer.addChild(gaugeFill);
+    gaugeFill = new Sprite(Texture.WHITE);
+    gaugeFill.x = L.GAUGE_X;
+    gaugeFill.y = L.GAUGE_Y;
+    gaugeFill.height = L.GAUGE_HEIGHT;
+    gaugeFill.width = 0;
+    gaugeFill.tint = GAUGE_RECOVERY_LOW;
+    hudContainer.addChild(gaugeFill);
 
-  const clearTick = new Sprite(Texture.WHITE);
-  clearTick.y = L.GAUGE_Y - 3;
-  clearTick.width = 2;
-  clearTick.height = L.GAUGE_HEIGHT + 6;
-  clearTick.tint = 0xffffff;
-  clearTick.visible = false;
-  hudContainer.addChild(clearTick);
+    clearTick = new Sprite(Texture.WHITE);
+    clearTick.y = L.GAUGE_Y - 3;
+    clearTick.width = 2;
+    clearTick.height = L.GAUGE_HEIGHT + 6;
+    clearTick.tint = 0xffffff;
+    clearTick.visible = false;
+    hudContainer.addChild(clearTick);
+  } else {
+    infoText = new Text({
+      text: '',
+      style: { fill: 0xc8d2ff, fontFamily: 'Arial', fontSize: 17, lineHeight: 26 },
+    });
+    infoText.x = L.INFO_X;
+    infoText.y = L.INFO_Y;
+    hudContainer.addChild(infoText);
+  }
 
   // Song progress bar (top, full width).
   const progressFill = new Sprite(Texture.WHITE);
@@ -423,6 +451,7 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   let lastClearLineShown = -1;
   let lastCoverShown = -1; // -1 = hidden
   let lastOptionFlashShown = '';
+  let lastInfoShown = '';
   let destroyed = false;
 
   function noteY(beat: number, currentBeat: number, hiSpeed: number): number {
@@ -531,28 +560,37 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
       lastComboShown = view.combo;
     }
 
-    // Gauge fill (spec MUST 3).
+    // Gauge fill (spec MUST 3) — song HUD only; practice passes gauge: null.
     const g = view.gauge;
-    const clamped = g.value < 0 ? 0 : g.value > 100 ? 100 : g.value;
-    gaugeFill.width = (L.GAUGE_WIDTH * clamped) / 100;
-    if (g.isSurvival) {
-      gaugeFill.tint = GAUGE_SURVIVAL;
-    } else {
-      gaugeFill.tint = g.value >= g.clearLine ? GAUGE_RECOVERY_HIGH : GAUGE_RECOVERY_LOW;
-    }
-    if (lastClearLineShown !== g.clearLine) {
-      if (g.clearLine > 0) {
-        clearTick.x = L.GAUGE_X + (L.GAUGE_WIDTH * g.clearLine) / 100;
-        clearTick.visible = true;
+    if (g !== null && gaugeFill !== null && clearTick !== null && gaugePctText !== null) {
+      const clamped = g.value < 0 ? 0 : g.value > 100 ? 100 : g.value;
+      gaugeFill.width = (L.GAUGE_WIDTH * clamped) / 100;
+      if (g.isSurvival) {
+        gaugeFill.tint = GAUGE_SURVIVAL;
       } else {
-        clearTick.visible = false;
+        gaugeFill.tint = g.value >= g.clearLine ? GAUGE_RECOVERY_HIGH : GAUGE_RECOVERY_LOW;
       }
-      lastClearLineShown = g.clearLine;
+      if (lastClearLineShown !== g.clearLine) {
+        if (g.clearLine > 0) {
+          clearTick.x = L.GAUGE_X + (L.GAUGE_WIDTH * g.clearLine) / 100;
+          clearTick.visible = true;
+        } else {
+          clearTick.visible = false;
+        }
+        lastClearLineShown = g.clearLine;
+      }
+      const pct = Math.round(clamped * 10) / 10;
+      if (pct !== lastGaugePctShown) {
+        gaugePctText.text = `${pct.toFixed(1)}%`;
+        lastGaugePctShown = pct;
+      }
     }
-    const pct = Math.round(clamped * 10) / 10;
-    if (pct !== lastGaugePctShown) {
-      gaugePctText.text = `${pct.toFixed(1)}%`;
-      lastGaugePctShown = pct;
+
+    // Practice stats block (rebuilt by the controller only when a value changed).
+    const info = view.infoText ?? '';
+    if (infoText !== null && info !== lastInfoShown) {
+      infoText.text = info;
+      lastInfoShown = info;
     }
 
     // Numeric HUD (update-on-change).

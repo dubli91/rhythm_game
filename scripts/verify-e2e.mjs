@@ -286,6 +286,103 @@ await step('play smoke: Overdrive Core ANOTHER (densest chart) loads + autoplays
   await page.screenshot({ path: SHOT('10-overdrive-smoke') });
 });
 
+// --- Practice mode (practice-mode.md acceptance criteria) ---
+let recordsBeforePractice = null;
+
+await step('enter practice editor from select (P) — song-select MUST 10', async () => {
+  recordsBeforePractice = await page.evaluate(() => localStorage.getItem('records.v1'));
+  await page.keyboard.press('KeyP');
+  await page.waitForSelector('[data-screen="PRACTICE_EDIT"].active .practice-grid', {
+    timeout: 5000,
+  });
+  await page.screenshot({ path: SHOT('13-practice-editor') });
+});
+
+await step('grid keyboard editing: Space places and removes a note', async () => {
+  const meta = () => page.$eval('.practice-meta', (n) => n.textContent);
+  await page.keyboard.press('Space');
+  if (!(await meta()).includes('1 note(s)')) throw new Error('Space did not place a note');
+  await page.keyboard.press('Space');
+  if (!(await meta()).includes('0 note(s)')) throw new Error('Space did not remove the note');
+});
+
+await step('1 bar + trill preset + 2 target loops', async () => {
+  await page.selectOption('label:has-text("BARS") select', '1');
+  await page.selectOption('label:has-text("PRESET") select', 'trill');
+  await page.click('button:has-text("APPLY PRESET")');
+  const meta = await page.$eval('.practice-meta', (n) => n.textContent);
+  console.log(`  meta: ${meta}`);
+  if (!meta.includes('16 note(s)')) throw new Error(`trill on 1 bar should be 16 notes: ${meta}`);
+  await page.fill('label:has-text("LOOPS") input', '2');
+});
+
+await step('save pattern to IndexedDB, listed by name', async () => {
+  await page.fill('label:has-text("NAME") input', 'E2E Trill');
+  await page.click('button:has-text("SAVE")');
+  await page.waitForFunction(
+    () => document.querySelector('.practice-status')?.textContent?.includes('saved'),
+    { timeout: 5000 },
+  );
+  const list = await page.$eval('.practice-list', (n) => n.textContent);
+  console.log(`  saved list: ${list}`);
+  if (!list.includes('E2E Trill')) throw new Error('saved pattern missing from list');
+});
+
+await step('start practice -> PixiJS canvas, no gauge, mash keys mid-loop', async () => {
+  await page.click('button:has-text("START PRACTICE")');
+  await page.waitForSelector('[data-screen="PRACTICE_PLAY"].active canvas', { timeout: 20000 });
+  await page.waitForTimeout(3500); // lead-in 0.75s + count-in + into loop 1
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press('KeyS');
+    await page.keyboard.press('KeyD');
+    await page.waitForTimeout(120);
+  }
+  await page.screenshot({ path: SHOT('14-practice-play') });
+});
+
+await step('2 loops auto-end -> back on editor with session summary', async () => {
+  // 2 cycles of (4+4) beats @120bpm = 8s + lead-in/handoff.
+  await page.waitForSelector('[data-screen="PRACTICE_EDIT"].active', { timeout: 20000 });
+  const status = await page.$eval('.practice-status', (n) => n.textContent);
+  console.log(`  summary: ${status}`);
+  if (!status.includes('session complete')) throw new Error('missing auto-end summary');
+  if (!status.includes('2 loop(s)')) throw new Error('summary should report 2 loops');
+  const canvases = await page.$$('canvas');
+  if (canvases.length > 0) throw new Error(`residual canvases after practice: ${canvases.length}`);
+  await page.screenshot({ path: SHOT('15-practice-summary') });
+});
+
+await step('practice wrote NOTHING to records (acceptance criterion)', async () => {
+  const after = await page.evaluate(() => localStorage.getItem('records.v1'));
+  if (after !== recordsBeforePractice) throw new Error('practice session modified records.v1');
+});
+
+await step('reload -> saved pattern survives (IndexedDB) and loads', async () => {
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForSelector('.press-key', { timeout: 5000 });
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.song-list li.selected', { timeout: 8000 });
+  await page.keyboard.press('KeyP');
+  await page.waitForSelector('[data-screen="PRACTICE_EDIT"].active .practice-grid', {
+    timeout: 5000,
+  });
+  await page.waitForFunction(
+    () => document.querySelector('.practice-list')?.textContent?.includes('E2E Trill'),
+    { timeout: 5000 },
+  );
+  await page.click('.practice-list li:has-text("E2E Trill") button:has-text("LOAD")');
+  const meta = await page.$eval('.practice-meta', (n) => n.textContent);
+  console.log(`  meta after load: ${meta}`);
+  if (!meta.includes('16 note(s)')) throw new Error('loaded pattern should have 16 notes');
+});
+
+await step('Escape returns editor -> song select', async () => {
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('[data-screen="SONG_SELECT"].active .song-list li.selected', {
+    timeout: 5000,
+  });
+});
+
 console.log('--- console messages (last 25) ---');
 for (const m of consoleMsgs.slice(-25)) console.log(m);
 console.log('--- errors ---');

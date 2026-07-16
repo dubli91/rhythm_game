@@ -1,8 +1,10 @@
-// App shell: DOM screens (TITLE / SONG_SELECT / RESULTS), bootstrap, audio unlock, and the
-// PLAY hand-off to the session controller (specs/app-shell-navigation.md).
+// App shell: DOM screens (TITLE / SONG_SELECT / PRACTICE_EDIT / RESULTS), bootstrap, audio
+// unlock, and the PLAY / PRACTICE_PLAY hand-offs to their session controllers
+// (specs/app-shell-navigation.md).
 //
-// DOM screens render via plain DOM; only PLAY uses the PixiJS canvas (MUST 13). The screen
-// state machine (screens.ts) owns legality of transitions; this module owns presentation.
+// DOM screens render via plain DOM; only PLAY/PRACTICE_PLAY use the PixiJS canvas (MUST 13).
+// The screen state machine (screens.ts) owns legality of transitions; this module owns
+// presentation.
 
 import { type PlayResult, startPlaySession } from '../features/play/controller';
 import type { ClearLamp } from '../features/play/gauge';
@@ -17,6 +19,10 @@ import {
 } from '../features/play/options';
 import { type SongAudioContextLike, createSongPlayer } from '../features/play/songPlayer';
 import { type Arrangement, GAUGE_TYPES, type GaugeType } from '../features/play/types';
+import { startPracticeSession } from '../features/practice/controller';
+import { type PracticeEditor, createPracticeEditor } from '../features/practice/editor';
+import type { PracticePattern } from '../features/practice/pattern';
+import { formatMeanDelta } from '../features/practice/stats';
 import { type RecordUpdateOutcome, openRecordsStore } from '../features/records/store';
 import {
   type PlayRequest,
@@ -28,6 +34,7 @@ import {
 } from '../features/select/model';
 import { type SongLibrary, loadLibrary, loadPlayableSong } from '../features/songs/library';
 import { type GameAudio, type VolumeSettings, createGameAudio } from '../lib/audio/context';
+import type { SfxAudioContextLike } from '../lib/audio/sfx';
 import type { Chart, Song } from '../lib/chart/types';
 import { openDatabase } from '../lib/storage/idb';
 import { type LocalDoc, STORAGE_KEYS, createLocalDoc } from '../lib/storage/local';
@@ -118,6 +125,32 @@ const STYLES = `
   .result-diff { color: #6fd0ff; font-size: 12px; letter-spacing: 0.02em; }
   .new-record { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #241a00; background: #ffcc33; border-radius: 3px; padding: 2px 6px; text-shadow: none; }
   .result-rank { font-size: 64px; font-weight: 800; color: #ffe066; margin: 10px 0 20px; }
+  .practice-status { min-height: 18px; color: #ffe066; font-size: 13px; margin-bottom: 10px; }
+  .practice-controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 10px; }
+  .practice-controls label { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #8a8aa8; letter-spacing: 0.08em; }
+  .practice-controls input, .practice-controls select { background: #10101c; color: #e8e8f0; border: 1px solid #2a2a44; border-radius: 4px; padding: 4px 8px; font: inherit; font-size: 13px; }
+  .practice-controls input[type=number] { width: 64px; }
+  .practice-controls input[type=text] { width: 160px; }
+  .practice-buttons { display: flex; gap: 10px; margin-bottom: 12px; }
+  .practice-btn { background: #16182b; color: #7df3ff; border: 1px solid #2a2a44; border-radius: 4px; padding: 6px 14px; font: inherit; font-size: 13px; letter-spacing: 0.08em; cursor: pointer; }
+  .practice-btn:hover { border-color: #7df3ff; }
+  .practice-btn.small { padding: 2px 8px; font-size: 11px; }
+  .practice-meta { color: #8a8aa8; font-size: 13px; margin-bottom: 6px; }
+  .practice-grid-head { display: grid; grid-template-columns: 64px repeat(7, 44px); gap: 2px; font-size: 11px; color: #55557a; text-align: center; margin-bottom: 2px; }
+  .practice-grid { display: grid; grid-template-columns: 64px repeat(7, 44px); gap: 2px; max-height: 38vh; overflow-y: auto; padding: 4px; background: #0a0a14; border-radius: 6px; align-content: start; }
+  .pcell { height: 15px; background: #0c0c14; border-radius: 2px; cursor: pointer; }
+  .pcell.beatstart { box-shadow: inset 0 -1px 0 #1a1e2a; }
+  .pcell.barstart { box-shadow: inset 0 -2px 0 #2a2a44; }
+  .pcell.note.lane-sc { background: #ff3344; }
+  .pcell.note.lane-odd { background: #f0f0f5; }
+  .pcell.note.lane-even { background: #3fa7ff; }
+  .pcell.cursor { outline: 2px solid #ffe066; outline-offset: -2px; }
+  .practice-list-title { color: #55557a; font-size: 12px; letter-spacing: 0.14em; margin: 14px 0 6px; }
+  .practice-list { list-style: none; margin: 0; padding: 0; max-height: 18vh; overflow-y: auto; }
+  .practice-list li { display: flex; gap: 12px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #16182b; font-size: 13px; }
+  .practice-list-name { min-width: 160px; }
+  .practice-list-meta { color: #8a8aa8; margin-right: auto; }
+  .practice-list-empty { color: #55557a; }
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -266,6 +299,8 @@ export function bootShell(root: HTMLElement): void {
   const titleEl = screenDiv('TITLE');
   const selectEl = screenDiv('SONG_SELECT');
   const playEl = screenDiv('PLAY', 'screen-play');
+  const practiceEditEl = screenDiv('PRACTICE_EDIT');
+  const practicePlayEl = screenDiv('PRACTICE_PLAY', 'screen-play');
   const resultsEl = screenDiv('RESULTS');
   const loadingOverlay = el('div', 'loading-overlay', 'LOADING…');
   document.body.appendChild(loadingOverlay);
@@ -337,7 +372,7 @@ export function bootShell(root: HTMLElement): void {
     el(
       'div',
       'hint',
-      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · G gauge · ←/→ hi-speed · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · keys: LShift S D F Space J K L',
+      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · G gauge · ←/→ hi-speed · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · P practice · keys: LShift S D F Space J K L',
     ),
   );
 
@@ -438,6 +473,91 @@ export function bootShell(root: HTMLElement): void {
       playOptionsDoc.write(playOptions);
     } catch (err) {
       console.error('failed to persist play options', err);
+    }
+  }
+
+  // --- PRACTICE (practice-mode.md; entry per song-select.md MUST 10) ---
+  let practiceEditor: PracticeEditor | null = null;
+  let practiceBusy = false;
+
+  function ensurePracticeEditor(): PracticeEditor {
+    if (practiceEditor === null) {
+      practiceEditor = createPracticeEditor({
+        mount: practiceEditEl,
+        getDb: () => db,
+        onStartPractice: (pattern, targetLoops) => void startPractice(pattern, targetLoops),
+        onExit: () => {
+          practiceEditor?.deactivate();
+          machine.transition('SONG_SELECT');
+        },
+      });
+    }
+    return practiceEditor;
+  }
+
+  function enterPracticeEditor(): void {
+    const editor = ensurePracticeEditor();
+    machine.transition('PRACTICE_EDIT');
+    editor.activate();
+  }
+
+  async function startPractice(
+    pattern: PracticePattern,
+    targetLoops: number | null,
+  ): Promise<void> {
+    if (practiceBusy) return;
+    const editor = ensurePracticeEditor();
+    if (gameAudio === null || audioCtx === null) {
+      editor.setStatus('audio not unlocked — cannot start practice');
+      return;
+    }
+    practiceBusy = true;
+    editor.deactivate();
+    machine.transition('PRACTICE_PLAY');
+    practicePlayEl.textContent = '';
+    try {
+      await startPracticeSession({
+        pattern,
+        targetLoops,
+        mount: practicePlayEl,
+        gameAudio,
+        sfxCtx: audioCtx as unknown as SfxAudioContextLike,
+        globalOffsetMs: settings.globalOffsetMs,
+        keyMap: activeKeyMap,
+        hiSpeed: playOptions.hiSpeed,
+        suddenPlusEnabled: playOptions.suddenPlusEnabled,
+        suddenPlusCover: playOptions.suddenPlusCover,
+        onExit(outcome) {
+          practiceBusy = false;
+          // Hi-speed / SUDDEN+ behave exactly like song play, persistence included
+          // (practice-mode.md MUST 9, play-options.md MUST 4/8). No record is ever
+          // written for practice (acceptance criterion).
+          playOptions.hiSpeed = outcome.hiSpeed;
+          playOptions.suddenPlusEnabled = outcome.suddenPlusEnabled;
+          playOptions.suddenPlusCover = outcome.suddenPlusCover;
+          savePlayOptions();
+          renderOptionsBar();
+          practicePlayEl.textContent = '';
+          machine.transition('PRACTICE_EDIT');
+          editor.activate();
+          const total = outcome.cumulative;
+          editor.setStatus(
+            total.loopsFinalized > 0
+              ? `session ${outcome.endedBy === 'completed' ? 'complete' : 'ended'}: ` +
+                  `${total.loopsFinalized} loop(s) · ACC ${total.exPercent.toFixed(1)}% · ` +
+                  `${formatMeanDelta(total.meanDeltaMs)} · BEST COMBO ${total.bestMaxCombo}`
+              : 'session ended before the first loop finished',
+          );
+        },
+      });
+    } catch (err) {
+      practiceBusy = false;
+      practicePlayEl.textContent = '';
+      if (machine.current() === 'PRACTICE_PLAY') machine.transition('PRACTICE_EDIT');
+      editor.activate();
+      editor.setStatus(
+        `failed to start practice: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -702,6 +822,9 @@ export function bootShell(root: HTMLElement): void {
         playOptions.autoplay = !playOptions.autoplay;
         renderOptionsBar();
         savePlayOptions();
+      } else if (event.code === 'KeyP') {
+        // Practice-session entry (song-select.md MUST 10).
+        enterPracticeEditor();
       }
       return;
     }

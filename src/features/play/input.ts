@@ -44,14 +44,17 @@ export interface LaneKeyEvent {
 
 // Non-gameplay in-play controls: quit (input-handling.md MUST 6) plus the
 // option-adjustment keys (play-options.md MUST 3/6). Extensible union — future
-// options (LIFT etc.) add variants here.
+// options (LIFT etc.) add variants here. bpmUp/bpmDown only fire when a screen
+// maps codes to them via extraControlCodes (practice-mode.md MUST 9).
 export type PlayControlAction =
   | 'quit'
   | 'hiSpeedUp'
   | 'hiSpeedDown'
   | 'suddenToggle'
   | 'coverUp'
-  | 'coverDown';
+  | 'coverDown'
+  | 'bpmUp'
+  | 'bpmDown';
 
 // Control keys take priority over lane keys so a custom key map can never
 // shadow them (settings-screen.md MUST 10 reserves these codes).
@@ -65,8 +68,14 @@ const CONTROL_CODES: ReadonlyMap<string, PlayControlAction> = new Map([
 ]);
 
 // Cover keys pass key-repeat through so holding them adjusts continuously
-// (play-options.md MUST 6); everything else fires once per physical press.
-const REPEATABLE_ACTIONS: ReadonlySet<PlayControlAction> = new Set(['coverUp', 'coverDown']);
+// (play-options.md MUST 6); BPM keys get the same hold-to-sweep treatment in
+// practice; everything else fires once per physical press.
+const REPEATABLE_ACTIONS: ReadonlySet<PlayControlAction> = new Set([
+  'coverUp',
+  'coverDown',
+  'bpmUp',
+  'bpmDown',
+]);
 
 export interface PlayControlEvent {
   action: PlayControlAction;
@@ -90,6 +99,9 @@ export interface KeyEventSource {
 export interface PlayInputOptions {
   /** Defaults to DEFAULT_KEY_MAP. */
   keyMap?: LaneKeyMap;
+  /** Screen-specific control keys (e.g. practice BPM adjust). Base CONTROL_CODES
+   *  always win a conflict so the reserved keys can never be remapped. */
+  extraControlCodes?: Readonly<Record<string, PlayControlAction>>;
   onLane(event: LaneKeyEvent): void;
   onControl(event: PlayControlEvent): void;
 }
@@ -107,6 +119,14 @@ export interface PlayInput {
 export function createPlayInput(target: KeyEventSource, options: PlayInputOptions): PlayInput {
   const keyMap = options.keyMap ?? DEFAULT_KEY_MAP;
 
+  const controlCodes = new Map<string, PlayControlAction>();
+  for (const [code, action] of Object.entries(options.extraControlCodes ?? {})) {
+    controlCodes.set(code, action);
+  }
+  for (const [code, action] of CONTROL_CODES) {
+    controlCodes.set(code, action); // base codes win conflicts
+  }
+
   const codeToLane = new Map<string, number>();
   keyMap.lanes.forEach((code, lane) => {
     codeToLane.set(code, lane);
@@ -120,7 +140,7 @@ export function createPlayInput(target: KeyEventSource, options: PlayInputOption
   let attached = false;
 
   function handleKeyDown(event: KeyLikeEvent): void {
-    const control = CONTROL_CODES.get(event.code);
+    const control = controlCodes.get(event.code);
     if (control !== undefined) {
       if (event.repeat && !REPEATABLE_ACTIONS.has(control)) {
         return;
