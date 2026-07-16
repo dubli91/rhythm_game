@@ -10,9 +10,11 @@ import type { GameAudio } from '../../lib/audio/context';
 import { computeNoteTimesMs, createTimingIndex } from '../../lib/chart/timing';
 import type { Chart, Song } from '../../lib/chart/types';
 import { createSongClock } from '../../lib/clock/audioClock';
+import { applyArrangement } from './arrange';
 import { type ClearLamp, clearLampFor, createGauge } from './gauge';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, createPlayInput } from './input';
 import { createJudge } from './judgement';
+import { clampCover, stepCover, stepHiSpeed } from './options';
 import { NOTE_CONSUMED, NOTE_MISSED, type PlayFrameView, createPlayfieldRenderer } from './render';
 import { createScorer } from './scoring';
 import type { ScoreSummary } from './scoring';
@@ -34,9 +36,14 @@ export interface PlayResult {
   /** Song/chart identity for record keying (results-records.md req 4). */
   songId: string;
   chartId: string;
-  /** Options used, for results/record display (results-records.md req 1). */
+  /** Options used, for results/record display (results-records.md req 1). Hi-speed
+   *  and SUDDEN+ report their FINAL values so in-play adjustments persist to the
+   *  next play (play-options.md MUST 4/8). */
   hiSpeed: number;
   arrangement: Arrangement;
+  suddenPlusEnabled: boolean;
+  /** 0..80 (%) */
+  suddenPlusCover: number;
 }
 
 export interface PlaySessionOptions {
@@ -54,6 +61,12 @@ export interface PlaySessionOptions {
   hiSpeed?: number;
   /** Defaults to 'OFF'; recorded on the result (play-options.md req 10). */
   arrangement?: Arrangement;
+  /** RANDOM permutation seed; omitted = fresh roll per attempt (retries re-roll). */
+  arrangementSeed?: number;
+  /** SUDDEN+ lane cover carried into the session (play-options.md MUST 5-8). */
+  suddenPlusEnabled?: boolean;
+  /** 0..80 (%) */
+  suddenPlusCover?: number;
   onFinished(result: PlayResult): void;
 }
 
@@ -68,6 +81,8 @@ export interface PlaySession {
 const AUTOPLAY_BEAM_MS = 90;
 /** Delay after the audio buffer ends before results, so the last judgement text is readable. */
 const RESULT_DELAY_MS = 300;
+/** How long an option change (hi-speed / SUDDEN+) stays on screen (play-options.md MUST 3). */
+const OPTION_FLASH_MS = 800;
 
 function bpmAtBeat(chart: Chart, beat: number): number {
   let bpm = chart.bpm.init;
@@ -79,7 +94,17 @@ function bpmAtBeat(chart: Chart, beat: number): number {
 }
 
 export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySession> {
-  const { chart, song, autoplay } = opts;
+  const { song, autoplay } = opts;
+  const resolvedArrangement = opts.arrangement ?? 'OFF';
+  // Pure lane substitution applied ONCE, before judge/renderer/autoplay ever see the
+  // chart — every consumer agrees on lanes and judgement/gauge stay provably
+  // unaffected (play-options.md MUST 10). Timing derives from beats only, so note
+  // times are identical either way.
+  const chart = applyArrangement(
+    opts.chart,
+    resolvedArrangement,
+    opts.arrangementSeed ?? Math.floor(Math.random() * 0x100000000),
+  );
   const timingIndex = createTimingIndex(chart.timing);
   const noteTimesMs = computeNoteTimesMs(chart);
   const totalNotes = chart.notes.length;
@@ -114,14 +139,25 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   let ending = false;
   let abandoned = false;
   let autoplayCursor = 0;
-  const resolvedHiSpeed = opts.hiSpeed ?? 1.0;
-  const resolvedArrangement = opts.arrangement ?? 'OFF';
+  // Mutable during play (play-options.md MUST 3/6); final values land on PlayResult.
+  let hiSpeed = opts.hiSpeed ?? 1.0;
+  let suddenEnabled = opts.suddenPlusEnabled ?? false;
+  let suddenCover = clampCover(opts.suddenPlusCover ?? 0);
+  // Option-change flash is pure UI feedback, so wall-clock time is fine here —
+  // the audio clock stays reserved for anything that touches judgement.
+  let optionFlashText = '';
+  let optionFlashUntilMs = 0;
+
+  function flashOption(text: string): void {
+    optionFlashText = text;
+    optionFlashUntilMs = performance.now() + OPTION_FLASH_MS;
+  }
 
   const view: PlayFrameView = {
     songTimeMs: 0,
     currentBeat: 0,
     currentBpm: chart.bpm.init,
-    hiSpeed: resolvedHiSpeed,
+    hiSpeed,
     progress: 0,
     heldLanes,
     noteStates,
@@ -129,6 +165,9 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     combo: 0,
     exScore: 0,
     lastJudgement: null,
+    suddenPlusEnabled: suddenEnabled,
+    suddenPlusCover: suddenCover,
+    optionFlashText: '',
   };
 
   function dispatch(event: JudgementEvent): void {
@@ -151,7 +190,28 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
       dispatch(judge.onInput(e.lane, t));
     },
     onControl(e) {
-      if (e.action === 'quit') endSession({ abandonedRun: true });
+      switch (e.action) {
+        case 'quit':
+          endSession({ abandonedRun: true });
+          break;
+        case 'hiSpeedUp':
+        case 'hiSpeedDown':
+          hiSpeed = stepHiSpeed(hiSpeed, e.action === 'hiSpeedUp' ? 1 : -1);
+          flashOption(`HI-SPEED ${hiSpeed.toFixed(2)}`);
+          break;
+        case 'suddenToggle':
+          suddenEnabled = !suddenEnabled;
+          flashOption(suddenEnabled ? `SUDDEN+ ${suddenCover}%` : 'SUDDEN+ OFF');
+          break;
+        case 'coverUp':
+        case 'coverDown':
+          // White number only moves while the cover is shown (IIDX convention);
+          // the height is remembered across toggles.
+          if (!suddenEnabled) break;
+          suddenCover = stepCover(suddenCover, e.action === 'coverUp' ? 1 : -1);
+          flashOption(`SUDDEN+ ${suddenCover}%`);
+          break;
+      }
     },
   });
   input.attach();
@@ -178,8 +238,10 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
       autoplay,
       songId: song.songId,
       chartId: chart.chartId,
-      hiSpeed: resolvedHiSpeed,
+      hiSpeed,
       arrangement: resolvedArrangement,
+      suddenPlusEnabled: suddenEnabled,
+      suddenPlusCover: suddenCover,
     };
   }
 
@@ -252,6 +314,10 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     view.songTimeMs = t;
     view.currentBeat = beat;
     view.currentBpm = bpmAtBeat(chart, beat);
+    view.hiSpeed = hiSpeed;
+    view.suddenPlusEnabled = suddenEnabled;
+    view.suddenPlusCover = suddenCover;
+    view.optionFlashText = performance.now() < optionFlashUntilMs ? optionFlashText : '';
     view.progress = Math.min(1, Math.max(0, t / durationMs));
     view.gauge = gauge.snapshot();
     const score = scorer.snapshot();

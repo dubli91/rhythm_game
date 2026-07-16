@@ -33,7 +33,7 @@ export interface PlayFrameView {
    *  renderer NEVER computes time itself. */
   currentBeat: number;
   currentBpm: number;
-  /** 1.0 in Milestone 2. */
+  /** Read fresh every frame — the controller may adjust it mid-play (PageUp/PageDown). */
   hiSpeed: number;
   /** 0..1 song progress. */
   progress: number;
@@ -45,6 +45,12 @@ export interface PlayFrameView {
   combo: number;
   exScore: number;
   lastJudgement: { grade: JudgementGrade; kind: JudgementKind; atSongTimeMs: number } | null;
+  /** SUDDEN+ cover over the top of the lanes (spec MUST 11, play-options.md MUST 5-7). */
+  suddenPlusEnabled: boolean;
+  /** Cover height as % of the scroll area above the judgement line (0..80). */
+  suddenPlusCover: number;
+  /** Brief option-change readout, '' when nothing to show (play-options.md MUST 3). */
+  optionFlashText: string;
 }
 
 export interface PlayfieldRenderer {
@@ -86,6 +92,10 @@ export const RENDER_LAYOUT = {
   COMBO_TEXT_Y: 300,
   JUDGEMENT_HOLD_MS: 500,
   PGREAT_FLASH_MS: 50,
+
+  // Option-change flash sits in the gap between judgement line (600) and gauge (645).
+  OPTION_FLASH_Y: 622,
+  COVER_COLOR: 0x0d0f1a,
 
   // HUD
   GAUGE_X: 700,
@@ -184,13 +194,22 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   const canvas = app.canvas;
   mount.appendChild(canvas);
 
-  // ── Scene graph, ordered back-to-front (spec: bg < beams < notes < line < HUD)
+  // ── Scene graph, ordered back-to-front (spec: bg < beams < notes < line < cover < HUD).
+  // The SUDDEN+ cover must occlude notes/beams (spec MUST 11) but never the HUD.
   const bgContainer = new Container();
   const beamContainer = new Container();
   const notesContainer = new Container();
   const lineContainer = new Container();
+  const coverContainer = new Container();
   const hudContainer = new Container();
-  app.stage.addChild(bgContainer, beamContainer, notesContainer, lineContainer, hudContainer);
+  app.stage.addChild(
+    bgContainer,
+    beamContainer,
+    notesContainer,
+    lineContainer,
+    coverContainer,
+    hudContainer,
+  );
 
   // Lane backgrounds (static).
   const laneBg = new Graphics();
@@ -230,6 +249,27 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   judgementLine.height = L.JUDGEMENT_LINE_HEIGHT;
   judgementLine.tint = L.JUDGEMENT_LINE_COLOR;
   lineContainer.addChild(judgementLine);
+
+  // SUDDEN+ cover (spec MUST 11): opaque panel from the top of the lanes, with the
+  // white-number % printed on it (play-options.md MUST 7). Created once; only its
+  // height/visibility/text mutate per frame (zero-allocation contract).
+  const coverSprite = new Sprite(Texture.WHITE);
+  coverSprite.x = L.PLAYFIELD_X;
+  coverSprite.y = L.LANE_TOP_Y;
+  coverSprite.width = playfieldWidth;
+  coverSprite.height = 0;
+  coverSprite.tint = L.COVER_COLOR;
+  coverSprite.visible = false;
+  coverContainer.addChild(coverSprite);
+
+  const coverText = new Text({
+    text: '',
+    style: { fill: 0xffffff, fontFamily: 'Arial', fontSize: 24, fontWeight: 'bold' },
+  });
+  coverText.anchor.set(0.5, 1);
+  coverText.x = playfieldCenterX;
+  coverText.visible = false;
+  coverContainer.addChild(coverText);
 
   // Note sprite pool (spec MUST 12): reuse tinted white sprites, never per-note Graphics.
   const notePool: Sprite[] = [];
@@ -348,6 +388,17 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   judgementText.visible = false;
   hudContainer.addChild(judgementText);
 
+  // Brief option-change readout (play-options.md MUST 3): "HI-SPEED 2.25" etc.
+  const optionFlash = new Text({
+    text: '',
+    style: { fill: 0xffe066, fontFamily: 'Arial', fontSize: 20, fontWeight: 'bold' },
+  });
+  optionFlash.anchor.set(0.5);
+  optionFlash.x = playfieldCenterX;
+  optionFlash.y = L.OPTION_FLASH_Y;
+  optionFlash.visible = false;
+  hudContainer.addChild(optionFlash);
+
   // ── Aspect-fit canvas sizing (spec MUST 1): preserve 16:9, letterbox in mount.
   function handleResize(): void {
     const availW = mount.clientWidth || window.innerWidth;
@@ -370,6 +421,8 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   let lastComboShown = -1;
   let lastGradeShown = '';
   let lastClearLineShown = -1;
+  let lastCoverShown = -1; // -1 = hidden
+  let lastOptionFlashShown = '';
   let destroyed = false;
 
   function noteY(beat: number, currentBeat: number, hiSpeed: number): number {
@@ -516,6 +569,34 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     if (hiShown !== lastHiSpeedShown) {
       hiSpeedText.text = `Hi-Speed  ${hiShown.toFixed(2)}`;
       lastHiSpeedShown = hiShown;
+    }
+
+    // SUDDEN+ cover (spec MUST 11). Height is a % of the scroll area above the
+    // judgement line, so 60% leaves exactly the bottom 40% visible (play-options.md
+    // acceptance criterion).
+    const coverPct = view.suddenPlusEnabled ? view.suddenPlusCover : -1;
+    if (coverPct !== lastCoverShown) {
+      if (coverPct < 0) {
+        coverSprite.visible = false;
+        coverText.visible = false;
+      } else {
+        const coverHeight = ((L.JUDGEMENT_LINE_Y - L.LANE_TOP_Y) * coverPct) / 100;
+        coverSprite.height = coverHeight;
+        coverSprite.visible = true;
+        coverText.text = `${coverPct}%`;
+        // Just above the cover's bottom edge; floor keeps 0% readable.
+        coverText.y = Math.max(L.LANE_TOP_Y + 30, L.LANE_TOP_Y + coverHeight - 6);
+        coverText.visible = true;
+      }
+      lastCoverShown = coverPct;
+    }
+
+    // Option-change flash (play-options.md MUST 3): controller owns the timing,
+    // renderer just mirrors the string.
+    if (view.optionFlashText !== lastOptionFlashShown) {
+      optionFlash.text = view.optionFlashText;
+      optionFlash.visible = view.optionFlashText !== '';
+      lastOptionFlashShown = view.optionFlashText;
     }
 
     // Progress bar.

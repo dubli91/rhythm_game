@@ -4,14 +4,13 @@
 
 > **"브라우저만으로, 설치 없이 비트매니아 IIDX 스타일의 리듬게임을 키보드로 플레이하고 실력을 쌓는다."**
 
-## 핵심 결정 사항 (인터뷰 결과, 2026-07-14)
+## 핵심 결정 사항 (인터뷰 결과, 2026-07-14 / 2026-07-16 개정: BMS 임포트 제외 — 내장 곡 + 연습 모드만 제공)
 
 | 항목 | 결정 |
 |---|---|
 | 키 모드 | 7키 + 스크래치 (IIDX SP 표준) |
-| 채보 형식 | BMS 지원, 임포트 시 내부 JSON 포맷으로 변환 |
+| 채보 형식 | 자체 내부 JSON 포맷 (내장 곡·연습 패턴 전용) |
 | 오디오 | 단일 음원 + 효과음 (키음 실시간 재생 없음) |
-| BMS 키음 처리 | 임포트 시 OfflineAudioContext로 믹스다운하여 단일 음원 생성 |
 | 입력 장치 | 키보드 전용 (키 컨피그 지원) |
 | 판정 | IIDX식 5단계 (PGREAT/GREAT/GOOD/BAD/POOR) + EX 스코어 |
 | 게이지 | 풀세트 (ASSIST EASY / EASY / NORMAL / HARD / EX-HARD) |
@@ -20,15 +19,14 @@
 | 기록 저장 | 로컬 저장만 (서버 없음) |
 | 렌더링 | WebGL (PixiJS) |
 | 스택 | TypeScript + Vite (프레임워크 없는 바닐라 구성) |
-| 곡 제공 | 내장 곡 + 사용자 BMS 임포트 (IndexedDB 보관) |
+| 곡 제공 | 내장 곡만 |
 
 ## 토픽 구성 (1 토픽 = 1 스펙)
 
 | 스펙 | 한 문장 정의 |
 |---|---|
 | [chart-format](chart-format.md) | 내부 채보 포맷은 플레이에 필요한 노트·타이밍 데이터를 정의한다 |
-| [bms-import](bms-import.md) | BMS 임포트 파이프라인은 BMS 패키지를 재생 가능한 내부 포맷 곡으로 변환한다 |
-| [song-library](song-library.md) | 곡 라이브러리는 내장 곡과 임포트 곡을 로컬에 보관·관리한다 |
+| [song-library](song-library.md) | 곡 라이브러리는 내장 곡을 보관·관리한다 |
 | [song-select](song-select.md) | 곡 선택 화면은 라이브러리를 탐색해 플레이할 곡과 옵션을 고르게 한다 |
 | [input-handling](input-handling.md) | 입력 시스템은 키보드 입력을 정확한 타임스탬프와 함께 게임 액션으로 전달한다 |
 | [judgement-scoring](judgement-scoring.md) | 판정 시스템은 입력 타이밍을 평가해 판정과 점수로 환산한다 |
@@ -47,11 +45,11 @@
 - **언어/빌드**: TypeScript, Vite. UI 프레임워크 없음(메뉴는 DOM, 플레이는 PixiJS 캔버스).
 - **렌더링**: PixiJS (WebGL), 목표 60fps.
 - **오디오**: Web Audio API. `AudioContext.currentTime`이 게임의 유일한 마스터 클럭.
-- **저장소**: 임포트 곡·연습 패턴은 IndexedDB, 기록·설정은 localStorage.
-- **오프라인 변환**: BMS 키음 믹스다운은 `OfflineAudioContext` 사용.
+- **저장소**: 연습 패턴은 IndexedDB, 기록·설정은 localStorage.
 
 ## 명시적 비목표 (v1에서 하지 않는 것)
 
+- 사용자 곡 추가(BMS 임포트) — 곡은 내장 곡만 제공 (2026-07-16 결정)
 - 멀티플레이, 서버 기록, 온라인 리더보드
 - 키음 실시간 재생 (BGM 단일 트랙으로 통일)
 - BGA(배경 영상) 재생

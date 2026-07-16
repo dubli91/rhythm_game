@@ -28,6 +28,8 @@ canvases → asserts zero page errors. Screenshots land in `/tmp/iidx-*.png`. Ex
   libasound2. Without root: `apt-get download libnspr4 libnss3 libasound2t64`, then
   `dpkg -x <deb> /tmp/pwlibs` for each, and run node with
   `LD_LIBRARY_PATH=/tmp/pwlibs/usr/lib/x86_64-linux-gnu`. Re-download if /tmp was cleared.
+  If `apt-get download` 404s (stale package lists, no sudo to update them), refresh into a
+  user-writable dir: `mkdir -p /tmp/apt/lists/partial && apt-get -o Dir::State::Lists=/tmp/apt/lists update && apt-get -o Dir::State::Lists=/tmp/apt/lists download libasound2t64`.
 - Launch args needed: `--autoplay-policy=no-user-gesture-required --enable-unsafe-swiftshader`
   (WebGL via swiftshader; "GPU stall due to ReadPixels" console warnings are benign).
 - Don't `pkill -f 'vite preview'` — it matches the agent shell itself (exit 144). Kill by

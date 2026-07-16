@@ -42,8 +42,31 @@ export interface LaneKeyEvent {
   timeStampMs: number;
 }
 
-// Extensible union — hi-speed/sudden+ keys arrive in Milestone 6.
-export type PlayControlAction = 'quit';
+// Non-gameplay in-play controls: quit (input-handling.md MUST 6) plus the
+// option-adjustment keys (play-options.md MUST 3/6). Extensible union — future
+// options (LIFT etc.) add variants here.
+export type PlayControlAction =
+  | 'quit'
+  | 'hiSpeedUp'
+  | 'hiSpeedDown'
+  | 'suddenToggle'
+  | 'coverUp'
+  | 'coverDown';
+
+// Control keys take priority over lane keys so a custom key map can never
+// shadow them (settings-screen.md MUST 10 reserves these codes).
+const CONTROL_CODES: ReadonlyMap<string, PlayControlAction> = new Map([
+  ['Escape', 'quit'],
+  ['PageUp', 'hiSpeedUp'],
+  ['PageDown', 'hiSpeedDown'],
+  ['Home', 'suddenToggle'],
+  ['ArrowUp', 'coverUp'],
+  ['ArrowDown', 'coverDown'],
+]);
+
+// Cover keys pass key-repeat through so holding them adjusts continuously
+// (play-options.md MUST 6); everything else fires once per physical press.
+const REPEATABLE_ACTIONS: ReadonlySet<PlayControlAction> = new Set(['coverUp', 'coverDown']);
 
 export interface PlayControlEvent {
   action: PlayControlAction;
@@ -97,13 +120,17 @@ export function createPlayInput(target: KeyEventSource, options: PlayInputOption
   let attached = false;
 
   function handleKeyDown(event: KeyLikeEvent): void {
-    if (event.repeat) {
+    const control = CONTROL_CODES.get(event.code);
+    if (control !== undefined) {
+      if (event.repeat && !REPEATABLE_ACTIONS.has(control)) {
+        return;
+      }
+      event.preventDefault();
+      options.onControl({ action: control, timeStampMs: event.timeStamp });
       return;
     }
 
-    if (event.code === 'Escape') {
-      event.preventDefault();
-      options.onControl({ action: 'quit', timeStampMs: event.timeStamp });
+    if (event.repeat) {
       return;
     }
 

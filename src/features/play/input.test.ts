@@ -197,6 +197,54 @@ describe('createPlayInput', () => {
     expect(onControl).not.toHaveBeenCalled();
   });
 
+  it('emits option-control actions for the play-options keys (play-options.md MUST 3/6)', () => {
+    const { source, onControl, onLane, input } = makeHarness();
+    input.attach();
+
+    const cases = [
+      ['PageUp', 'hiSpeedUp'],
+      ['PageDown', 'hiSpeedDown'],
+      ['Home', 'suddenToggle'],
+      ['ArrowUp', 'coverUp'],
+      ['ArrowDown', 'coverDown'],
+    ] as const;
+    cases.forEach(([code, action], i) => {
+      onControl.mockClear();
+      const event = makeEvent(code, { timeStamp: 100 + i });
+      source.dispatch('keydown', event);
+      expect(onControl).toHaveBeenCalledExactlyOnceWith({ action, timeStampMs: 100 + i });
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
+    expect(onLane).not.toHaveBeenCalled();
+  });
+
+  it('passes key-repeat through for cover keys only (hold-to-adjust, MUST 6)', () => {
+    const { source, onControl, input } = makeHarness();
+    input.attach();
+
+    source.dispatch('keydown', makeEvent('ArrowUp', { repeat: true, timeStamp: 1 }));
+    source.dispatch('keydown', makeEvent('ArrowDown', { repeat: true, timeStamp: 2 }));
+    expect(onControl).toHaveBeenCalledTimes(2);
+
+    onControl.mockClear();
+    for (const code of ['PageUp', 'PageDown', 'Home', 'Escape']) {
+      source.dispatch('keydown', makeEvent(code, { repeat: true }));
+    }
+    expect(onControl).not.toHaveBeenCalled();
+  });
+
+  it('control codes win over a key map that tries to bind them to a lane', () => {
+    const customMap: LaneKeyMap = {
+      lanes: ['ArrowUp', 'KeyB', 'KeyC', 'KeyD', 'KeyE', 'KeyF', 'KeyG', 'KeyH'],
+    };
+    const { source, onLane, onControl, input } = makeHarness(customMap);
+    input.attach();
+
+    source.dispatch('keydown', makeEvent('ArrowUp', { timeStamp: 9 }));
+    expect(onControl).toHaveBeenCalledExactlyOnceWith({ action: 'coverUp', timeStampMs: 9 });
+    expect(onLane).not.toHaveBeenCalled();
+  });
+
   it('never emits or preventDefaults for unmapped keys on keyup either', () => {
     const { source, onLane, input } = makeHarness();
     input.attach();

@@ -36,13 +36,13 @@
 
 ### 오디오 — MUST
 
-9. ogg vorbis, 44.1kHz 스테레오, 피크 노멀라이즈(≈ -1dBFS, [bms-import](bms-import.md) 믹스다운
-   기준과 동일). 음원의 실질 시작 지점을 `offsetMs`로 기록하고 재생·채보 타이밍의 기준으로 삼는다.
+9. ogg vorbis, 44.1kHz 스테레오, 피크 노멀라이즈(≈ -1dBFS). 음원의 실질 시작 지점을 `offsetMs`로
+   기록하고 재생·채보 타이밍의 기준으로 삼는다.
 
 ### 채보 제작 — MUST
 
 10. 기본 제작 방식은 내부 [chart-format](chart-format.md) JSON 수기 작성이다(연습 세션 그리드
-    에디터나 자체 BMS를 [bms-import](bms-import.md)로 변환 후 내보내는 경로도 배제하지 않음).
+    에디터를 활용하는 경로도 배제하지 않음).
 11. 배포 채보는 모두 [chart-format](chart-format.md) SHOULD 10 스키마 검증기와 beat→ms 변환
     (MUST 7)을 경고 없이 통과해야 한다.
 12. 유닛 테스트가 `public/songs/` 하위 모든 채보를 로드해 스키마 검증·beat→ms 변환을 수행하고,
@@ -73,7 +73,7 @@
 
 - 요구 출처: [song-library](song-library.md) MUST 1·3, [chart-format](chart-format.md) "내장 곡 제작"
 - 준수: [chart-format](chart-format.md) 채보 스키마·타이밍 계산, [results-records](results-records.md)
-  SHOULD 12 결정적 ID, [bms-import](bms-import.md) 오디오 정규화 기준
+  SHOULD 12 결정적 ID
 - 소비자: [song-select](song-select.md)(카탈로그·난이도 표시), [audio-playback](audio-playback.md)
   (음원 로드·`offsetMs`)
 

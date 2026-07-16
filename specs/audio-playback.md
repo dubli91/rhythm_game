@@ -12,7 +12,7 @@
 ### 재생 — MUST
 
 1. `AudioContext`는 사용자 제스처(첫 키 입력/클릭) 후 unlock한다. suspended 상태 처리 포함.
-2. 곡 재생은 `AudioBufferSourceNode` 하나로 한다: 내장 곡은 fetch+decode, 임포트 곡은 IndexedDB Blob을 decode.
+2. 곡 재생은 `AudioBufferSourceNode` 하나로 한다: 음원을 fetch+decode해 사용한다.
 3. 재생 시작 시각 `t0 = ctx.currentTime + 리드인` 으로 예약 시작(`source.start(t0)`)한다. 리드인(기본 1초) 동안 카운트다운 없이 채보가 미리 스크롤되어 내려온다.
 4. 플레이 중 일시정지는 없다. `Escape`는 곡 포기이며 음원을 페이드아웃 후 정지한다. 폐곡([gauge-clear](gauge-clear.md))도 동일한 정지 경로를 쓴다.
 

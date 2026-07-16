@@ -4,8 +4,8 @@
 
 ## 배경
 
-BMS를 직접 플레이하지 않고, 임포트 시 내부 JSON 포맷으로 변환해 사용한다([bms-import](bms-import.md)).
-내장 곡도 처음부터 이 포맷으로 제작한다. 게임플레이·렌더링·판정 코드는 이 포맷만 알면 된다.
+내장 곡과 연습 패턴이 처음부터 사용하는 자체 JSON 포맷이다. 게임플레이·렌더링·판정 코드는 이
+포맷만 알면 된다.
 
 ## 요구사항
 
@@ -19,8 +19,8 @@ BMS를 직접 플레이하지 않고, 임포트 시 내부 JSON 포맷으로 변
    - BPM 변경: `{ beat, bpm }` 목록 (첫 항목이 초기 BPM).
    - STOP(스크롤 정지): `{ beat, durationBeats }` 목록.
 6. 노트 종류는 `tap`(일반 노트)을 지원한다.
-7. 로드 시 타이밍 이벤트로부터 각 노트의 **절대 시각(ms)** 을 계산하는 함수를 제공한다. BPM 변경·STOP을 모두 반영해야 하며, 계산 결과는 판정·렌더링·믹스다운이 공통으로 사용한다.
-8. 같은 곡(songId)에 여러 채보(chartId, 난이도별)가 속하는 곡-채보 2계층 구조를 가진다. 곡 레벨에 음원 참조(내장 곡은 URL, 임포트 곡은 IndexedDB 키)와 음원 재생 오프셋(ms)을 둔다.
+7. 로드 시 타이밍 이벤트로부터 각 노트의 **절대 시각(ms)** 을 계산하는 함수를 제공한다. BPM 변경·STOP을 모두 반영해야 하며, 계산 결과는 판정·렌더링이 공통으로 사용한다.
+8. 같은 곡(songId)에 여러 채보(chartId, 난이도별)가 속하는 곡-채보 2계층 구조를 가진다. 곡 레벨에 음원 참조(URL)와 음원 재생 오프셋(ms)을 둔다.
 
 ### SHOULD
 
@@ -34,7 +34,7 @@ BMS를 직접 플레이하지 않고, 임포트 시 내부 JSON 포맷으로 변
 interface Song {
   songId: string;
   title: string; artist: string; genre: string;
-  audio: { source: 'builtin' | 'imported'; ref: string; offsetMs: number };
+  audio: { source: 'builtin'; ref: string; offsetMs: number };
   charts: Chart[];
 }
 
@@ -43,7 +43,7 @@ interface Chart {
   chartId: string;
   difficulty: 'BEGINNER' | 'NORMAL' | 'HYPER' | 'ANOTHER';
   level: number;                    // 1..12
-  total: number;                    // 게이지 회복 총량 (BMS #TOTAL 유래)
+  total: number;                    // 게이지 회복 총량
   bpm: { init: number; min: number; max: number };
   timing: {
     bpmEvents: { beat: number; bpm: number }[];
@@ -63,7 +63,7 @@ interface Chart {
 ## 의존 관계
 
 - 소비자: [judgement-scoring](judgement-scoring.md), [playfield-rendering](playfield-rendering.md), [audio-playback](audio-playback.md), [practice-mode](practice-mode.md)
-- 생산자: [bms-import](bms-import.md), 내장 곡 제작, [practice-mode](practice-mode.md)의 패턴 에디터
+- 생산자: 내장 곡 제작([builtin-song-content](builtin-song-content.md)), [practice-mode](practice-mode.md)의 패턴 에디터
 
 ## 미해결 질문
 

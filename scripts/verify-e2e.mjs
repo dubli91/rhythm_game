@@ -185,6 +185,58 @@ await step('hi-speed adjust from options panel persists', async () => {
   if (!doc || !doc.includes('1.5')) throw new Error('hi-speed not persisted');
 });
 
+await step('arrangement + SUDDEN+ from options panel persist', async () => {
+  await page.keyboard.press('KeyR'); // OFF -> RANDOM
+  let bar = await page.$eval('.options-bar', (n) => n.textContent);
+  if (!bar.includes('RANDOM')) throw new Error('arrange should read RANDOM after R');
+  await page.keyboard.press('Home'); // SUDDEN+ ON (default cover 30%)
+  await page.keyboard.press('PageUp'); // 31
+  await page.keyboard.press('PageUp'); // 32
+  bar = await page.$eval('.options-bar', (n) => n.textContent);
+  console.log(`  options bar: ${bar}`);
+  if (!bar.includes('SUDDEN+ 32%'))
+    throw new Error('sudden+ should read 32% after Home + 2x PageUp');
+  const doc = await page.evaluate(() => localStorage.getItem('playOptions.v1'));
+  console.log(`  playOptions.v1: ${doc}`);
+  if (!doc || !doc.includes('"arrangement":"RANDOM"')) throw new Error('arrangement not persisted');
+  if (!doc.includes('"suddenPlusCover":32')) throw new Error('cover not persisted');
+});
+
+await step('in-play option keys adjust hi-speed/cover; results + persistence', async () => {
+  // Collapse back to the song row so navigateToSong starts from a clean state.
+  await page.keyboard.press('Escape');
+  await navigateToSong('First Light');
+  await page.keyboard.press('Enter'); // expand
+  await page.waitForSelector('.song-list li.chart-row', { timeout: 5000 });
+  await page.keyboard.press('Enter'); // play (autoplay still ON, RANDOM + SUD+ 32%)
+  await page.waitForSelector('.screen-play canvas', { timeout: 20000 });
+  await page.waitForTimeout(2500);
+  await page.keyboard.press('PageUp'); // hi-speed 1.50 -> 1.75
+  await page.keyboard.press('ArrowDown'); // cover 32 -> 31
+  await page.keyboard.press('ArrowDown'); // cover 31 -> 30
+  await page.screenshot({ path: SHOT('11-inplay-options') });
+  // Let autoplay reach the first notes so the RANDOM-invariance check below is real.
+  await page.waitForTimeout(6000);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.result-status', { timeout: 8000 });
+  const sub = await page.$eval('.result-sub', (n) => n.textContent);
+  console.log(`  sub: ${sub}`);
+  if (!sub.includes('HS 1.75')) throw new Error('results should show adjusted HS 1.75');
+  if (!sub.includes('RANDOM')) throw new Error('results should show RANDOM');
+  if (!sub.includes('SUD+ 30%')) throw new Error('results should show SUD+ 30%');
+  const grid = await page.$eval('.result-grid', (n) => n.textContent);
+  if (grid.includes('PGREAT0'))
+    throw new Error('RANDOM autoplay produced zero PGREATs (lane substitution broke judgement)');
+  const doc = await page.evaluate(() => localStorage.getItem('playOptions.v1'));
+  console.log(`  playOptions.v1: ${doc}`);
+  if (!doc.includes('"hiSpeed":1.75')) throw new Error('adjusted hi-speed not persisted');
+  if (!doc.includes('"suddenPlusCover":30')) throw new Error('adjusted cover not persisted');
+  await page.keyboard.press('Escape'); // back to select
+  await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
+  await page.keyboard.press('Escape'); // collapse for the next navigate
+  await page.screenshot({ path: SHOT('12-after-inplay-options') });
+});
+
 // Lazy-load + play smoke for the OTHER built-in songs: exercises per-song chart/
 // audio fetch on demand and the renderer against the multi-BPM chart (Neon
 // Cascade, 140->175->140 + STOP) and the densest chart (Overdrive Core ANOTHER,
@@ -221,6 +273,13 @@ await step(
     await page.screenshot({ path: SHOT('9-neon-smoke') });
   },
 );
+
+await step('cycle arrangement to MIRROR for the dense-chart smoke', async () => {
+  await page.keyboard.press('KeyR'); // RANDOM -> MIRROR
+  const bar = await page.$eval('.options-bar', (n) => n.textContent);
+  console.log(`  options bar: ${bar}`);
+  if (!bar.includes('MIRROR')) throw new Error('arrange should read MIRROR');
+});
 
 await step('play smoke: Overdrive Core ANOTHER (densest chart) loads + autoplays', async () => {
   await playSmoke('Overdrive Core', 'ANOTHER', 8);

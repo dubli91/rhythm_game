@@ -12,9 +12,9 @@
 
 ### 화면 상태 기계 — MUST
 
-1. 화면은 열거형 하나로 관리한다: `TITLE, SONG_SELECT, SETTINGS, IMPORT, PRACTICE_EDIT,
+1. 화면은 열거형 하나로 관리한다: `TITLE, SONG_SELECT, SETTINGS, PRACTICE_EDIT,
    PRACTICE_PLAY, PLAY, RESULTS`. 동시에 두 화면이 활성화되지 않는다.
-2. 허용 전환: `TITLE→SONG_SELECT`(앱 로드당 1회) / `SONG_SELECT↔SETTINGS` / `SONG_SELECT↔IMPORT` /
+2. 허용 전환: `TITLE→SONG_SELECT`(앱 로드당 1회) / `SONG_SELECT↔SETTINGS` /
    `SONG_SELECT↔PRACTICE_EDIT` / `SONG_SELECT→PLAY→RESULTS` / `RESULTS→PLAY`(재도전, 동일 곡·
    동일 옵션) / `RESULTS→SONG_SELECT`. `PRACTICE_EDIT↔PRACTICE_PLAY`는 [practice-mode](practice-mode.md)
    소관이다. 목록에 없는 전환(예: `TITLE→SETTINGS`, `PLAY→SONG_SELECT` 직접 이동)은 금지한다 —
@@ -26,7 +26,7 @@
 4. TITLE 표시와 동시에 백그라운드 부트스트랩을 실행한다: localStorage에서 키 맵
    ([input-handling](input-handling.md)), 판정 오프셋·볼륨·키 컨피그([settings-screen](settings-screen.md)),
    플레이 옵션([play-options](play-options.md)), 기록([results-records](results-records.md))을 복원하고,
-   곡 라이브러리 메타데이터(내장 `index.json` + IndexedDB 임포트 목록, [song-library](song-library.md))를
+   곡 라이브러리 메타데이터(내장 `index.json`, [song-library](song-library.md))를
    로드한다.
 5. localStorage 항목이 파싱 불가(손상)면 해당 항목만 기본값으로 대체하고 부팅을 계속한다 — 하나의
    손상된 키가 전체 부팅을 막지 않는다. 기록 손상은 [results-records](results-records.md)의 백업/초기화
@@ -48,14 +48,14 @@
    구분한다 — 기록에 실제로 남길 필드는 [results-records](results-records.md) 소관이다.
 10. PRACTICE_PLAY 중 Escape는 [practice-mode](practice-mode.md)를 따라 PRACTICE_EDIT로 복귀한다 —
     본 스펙은 관여하지 않는다.
-11. SETTINGS/IMPORT/PRACTICE_EDIT/RESULTS에서 Escape는 SONG_SELECT로 한 단계 복귀한다(화면 자체의
+11. SETTINGS/PRACTICE_EDIT/RESULTS에서 Escape는 SONG_SELECT로 한 단계 복귀한다(화면 자체의
     예외, 예를 들어 [settings-screen](settings-screen.md)의 키 캡처 중 Escape 처리는 해당 스펙이
     정의한다). TITLE에서 Escape는 아무 동작도 하지 않는다.
 12. 플레이 중 일시정지는 없다([00-overview](00-overview.md) 비목표) — Escape가 유일한 중단 수단이다.
 
 ### DOM/PixiJS 경계 — MUST
 
-13. TITLE/SONG_SELECT/SETTINGS/IMPORT/PRACTICE_EDIT/RESULTS는 DOM, PLAY/PRACTICE_PLAY는 PixiJS
+13. TITLE/SONG_SELECT/SETTINGS/PRACTICE_EDIT/RESULTS는 DOM, PLAY/PRACTICE_PLAY는 PixiJS
     캔버스로 그린다([playfield-rendering](playfield-rendering.md)). PixiJS 화면 진입 시
     `PIXI.Application`을 생성해 마운트하고, DOM 화면으로 돌아갈 때
     `destroy(true, { children: true, texture: true })`로 파괴한다 — 둘이 동시에 보이지 않는다.
@@ -67,8 +67,7 @@
 15. SONG_SELECT→PLAY 전환 중 채보·음원 로드 실패 시 SONG_SELECT로 복귀하고 원인 메시지를
     표시한다([song-select](song-select.md) 요구사항 9와 동일 계약).
 16. 화면 전환 중에는 로딩 표시로 입력을 일시 차단한다. 실패 시 항상 직전 화면 또는 SONG_SELECT로
-    복귀하며 빈 화면·멈춘 상태로 끝나지 않는다. IMPORT 중 오류는 전환 없이 그 자리에 표시한다
-    ([song-library](song-library.md), [bms-import](bms-import.md)).
+    복귀하며 빈 화면·멈춘 상태로 끝나지 않는다.
 
 ### 키보드 포커스·입력 스코프 — MUST
 
@@ -106,9 +105,3 @@
   (SETTINGS), [practice-mode](practice-mode.md)(PRACTICE_EDIT/PRACTICE_PLAY),
   [playfield-rendering](playfield-rendering.md)(PLAY 캔버스), [results-records](results-records.md)(RESULTS)
 - 정책 참조: [00-overview](00-overview.md) 비목표(플레이 중 일시정지 없음)
-
-## 미해결 질문
-
-- IMPORT 화면 자체의 레이아웃·내비게이션을 규정하는 전용 스펙이 없다(현재는
-  [song-library](song-library.md) 요구사항 7의 짧은 언급뿐). 진행 중 다른 화면으로 이동 시 임포트를
-  취소할지 백그라운드로 유지할지도 미정 — [bms-import](bms-import.md)와 조율 필요.

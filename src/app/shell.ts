@@ -7,8 +7,16 @@
 import { type PlayResult, startPlaySession } from '../features/play/controller';
 import type { ClearLamp } from '../features/play/gauge';
 import { DEFAULT_KEY_MAP, isValidKeyMap } from '../features/play/input';
+import {
+  ARRANGEMENTS,
+  HI_SPEED_MAX,
+  HI_SPEED_MIN,
+  HI_SPEED_STEP,
+  nextArrangement,
+  stepCover,
+} from '../features/play/options';
 import { type SongAudioContextLike, createSongPlayer } from '../features/play/songPlayer';
-import { GAUGE_TYPES, type GaugeType } from '../features/play/types';
+import { type Arrangement, GAUGE_TYPES, type GaugeType } from '../features/play/types';
 import { type RecordUpdateOutcome, openRecordsStore } from '../features/records/store';
 import {
   type PlayRequest,
@@ -29,6 +37,10 @@ interface PlayOptionsDoc {
   gaugeType: GaugeType;
   autoplay: boolean;
   hiSpeed: number;
+  arrangement: Arrangement;
+  suddenPlusEnabled: boolean;
+  /** 0..80 (%) */
+  suddenPlusCover: number;
 }
 
 interface SettingsDoc {
@@ -120,13 +132,17 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 function defaultPlayOptions(): PlayOptionsDoc {
-  return { gaugeType: 'NORMAL', autoplay: false, hiSpeed: 1.0 };
+  // Cover defaults to 30% (disabled) so the first SUDDEN+ toggle visibly covers
+  // something; the spec leaves the default white number open.
+  return {
+    gaugeType: 'NORMAL',
+    autoplay: false,
+    hiSpeed: 1.0,
+    arrangement: 'OFF',
+    suddenPlusEnabled: false,
+    suddenPlusCover: 30,
+  };
 }
-
-// Hi-speed range/step per play-options.md MUST 1 (0.50–10.00, step 0.25).
-const HI_SPEED_MIN = 0.5;
-const HI_SPEED_MAX = 10;
-const HI_SPEED_STEP = 0.25;
 
 function defaultSettings(): SettingsDoc {
   return {
@@ -139,13 +155,35 @@ function defaultSettings(): SettingsDoc {
 function isPlayOptionsDoc(data: unknown): data is PlayOptionsDoc {
   if (typeof data !== 'object' || data === null) return false;
   const doc = data as Record<string, unknown>;
-  return (
+  const base =
     typeof doc.gaugeType === 'string' &&
     (GAUGE_TYPES as readonly string[]).includes(doc.gaugeType) &&
     typeof doc.autoplay === 'boolean' &&
     typeof doc.hiSpeed === 'number' &&
-    Number.isFinite(doc.hiSpeed)
-  );
+    Number.isFinite(doc.hiSpeed);
+  if (!base) return false;
+  // Newer fields (arrangement/SUDDEN+) may be absent from docs stored by older builds — the read
+  // path fills them from defaults (spread below), so absence isn't corruption,
+  // but a present-and-mistyped field is.
+  if (
+    doc.arrangement !== undefined &&
+    !(
+      typeof doc.arrangement === 'string' &&
+      (ARRANGEMENTS as readonly string[]).includes(doc.arrangement)
+    )
+  ) {
+    return false;
+  }
+  if (doc.suddenPlusEnabled !== undefined && typeof doc.suddenPlusEnabled !== 'boolean') {
+    return false;
+  }
+  if (
+    doc.suddenPlusCover !== undefined &&
+    !(typeof doc.suddenPlusCover === 'number' && Number.isFinite(doc.suddenPlusCover))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function defaultSelectDoc(): SelectDoc {
@@ -208,7 +246,8 @@ export function bootShell(root: HTMLElement): void {
     storage: window.localStorage,
     confirmReset: (message) => window.confirm(message),
   });
-  const playOptions = playOptionsDoc.read();
+  // Spread over defaults fills fields added after the doc was stored (see validator).
+  const playOptions: PlayOptionsDoc = { ...defaultPlayOptions(), ...playOptionsDoc.read() };
   const settings = settingsDoc.read();
   const keyMap = { lanes: settings.keyMapLanes };
   const activeKeyMap = isValidKeyMap(keyMap) ? keyMap : DEFAULT_KEY_MAP;
@@ -289,14 +328,16 @@ export function bootShell(root: HTMLElement): void {
   const optionsBar = el('div', 'options-bar');
   const gaugeOpt = el('span');
   const hiSpeedOpt = el('span');
+  const arrangeOpt = el('span');
+  const suddenOpt = el('span');
   const autoplayOpt = el('span');
-  optionsBar.append(gaugeOpt, hiSpeedOpt, autoplayOpt);
+  optionsBar.append(gaugeOpt, hiSpeedOpt, arrangeOpt, suddenOpt, autoplayOpt);
   selectEl.appendChild(optionsBar);
   selectEl.appendChild(
     el(
       'div',
       'hint',
-      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · G gauge · ←/→ hi-speed · A autoplay · keys: LShift S D F Space J K L',
+      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · G gauge · ←/→ hi-speed · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · keys: LShift S D F Space J K L',
     ),
   );
 
@@ -328,6 +369,10 @@ export function bootShell(root: HTMLElement): void {
   function renderOptionsBar(): void {
     gaugeOpt.innerHTML = `GAUGE <b>${playOptions.gaugeType.replace('_', ' ')}</b>`;
     hiSpeedOpt.innerHTML = `HI-SPEED <b>${playOptions.hiSpeed.toFixed(2)}</b>`;
+    arrangeOpt.innerHTML = `ARRANGE <b>${playOptions.arrangement}</b>`;
+    suddenOpt.innerHTML = `SUDDEN+ <b>${
+      playOptions.suddenPlusEnabled ? `${playOptions.suddenPlusCover}%` : 'OFF'
+    }</b>`;
     autoplayOpt.innerHTML = `AUTOPLAY <b>${playOptions.autoplay ? 'ON (no record)' : 'OFF'}</b>`;
   }
 
@@ -437,8 +482,18 @@ export function bootShell(root: HTMLElement): void {
       globalOffsetMs: settings.globalOffsetMs,
       keyMap: activeKeyMap,
       hiSpeed: playOptions.hiSpeed,
+      arrangement: playOptions.arrangement,
+      suddenPlusEnabled: playOptions.suddenPlusEnabled,
+      suddenPlusCover: playOptions.suddenPlusCover,
       onFinished(result) {
         lastResult = result;
+        // In-play PageUp/PageDown and SUDDEN+ adjustments persist to the next play,
+        // retries included (play-options.md MUST 4/8).
+        playOptions.hiSpeed = result.hiSpeed;
+        playOptions.suddenPlusEnabled = result.suddenPlusEnabled;
+        playOptions.suddenPlusCover = result.suddenPlusCover;
+        savePlayOptions();
+        renderOptionsBar();
         // recordPlay writes the record once per song end and skips (returns null)
         // for autoplay plays (results-records.md req 6/7).
         const outcome = recordsStore.recordPlay(
@@ -509,6 +564,7 @@ export function bootShell(root: HTMLElement): void {
     const subParts: string[] = [`${result.gaugeType.replace('_', ' ')} GAUGE`];
     subParts.push(`HS ${result.hiSpeed.toFixed(2)}`);
     if (result.arrangement !== 'OFF') subParts.push(result.arrangement);
+    if (result.suddenPlusEnabled) subParts.push(`SUD+ ${result.suddenPlusCover}%`);
     if (result.abandoned) subParts.push('early termination (give-up)');
     if (!result.finishedSong && !result.abandoned)
       subParts.push(`died at ${(result.endedAtProgress * 100).toFixed(0)}%`);
@@ -622,6 +678,26 @@ export function bootShell(root: HTMLElement): void {
         if (next !== undefined) playOptions.gaugeType = next;
         renderOptionsBar();
         savePlayOptions();
+      } else if (event.code === 'KeyR') {
+        playOptions.arrangement = nextArrangement(playOptions.arrangement);
+        renderOptionsBar();
+        savePlayOptions();
+      } else if (event.code === 'Home') {
+        event.preventDefault();
+        playOptions.suddenPlusEnabled = !playOptions.suddenPlusEnabled;
+        renderOptionsBar();
+        savePlayOptions();
+      } else if (event.code === 'PageUp' || event.code === 'PageDown') {
+        event.preventDefault();
+        // Same gate as in-play: the white number only moves while the cover is on.
+        if (playOptions.suddenPlusEnabled) {
+          playOptions.suddenPlusCover = stepCover(
+            playOptions.suddenPlusCover,
+            event.code === 'PageUp' ? 1 : -1,
+          );
+          renderOptionsBar();
+          savePlayOptions();
+        }
       } else if (event.code === 'KeyA') {
         playOptions.autoplay = !playOptions.autoplay;
         renderOptionsBar();
