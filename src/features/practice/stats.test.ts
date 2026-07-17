@@ -1,9 +1,19 @@
 // Practice statistics tests (practice-mode.md MUST 8: per-loop counts,
-// accuracy %, signed δ mean, cumulative across loops).
+// accuracy %, signed δ mean, cumulative across loops; SHOULD 13: δ histogram).
+//
+// The histogram bucket boundaries are pinned exactly — an off-by-one there
+// silently misfiles every hit near a bucket edge, and nothing downstream
+// (a text sparkline) would make that visible.
 
 import { describe, expect, it } from 'vitest';
 import type { JudgementEvent } from '../play/types';
-import { createPracticeStats, formatMeanDelta } from './stats';
+import {
+  DELTA_HISTOGRAM_BUCKETS,
+  DELTA_HISTOGRAM_BUCKET_MS,
+  createPracticeStats,
+  formatDeltaHistogram,
+  formatMeanDelta,
+} from './stats';
 
 function hit(deltaMs: number, grade: JudgementEvent['grade'] = 'PGREAT'): JudgementEvent {
   return { kind: 'hit', grade, lane: 1, noteIndex: 0, deltaMs, songTimeMs: 1000 };
@@ -111,5 +121,77 @@ describe('formatMeanDelta', () => {
     expect(formatMeanDelta(-3.14)).toBe('δ −3.1ms early');
     expect(formatMeanDelta(0.01)).toBe('δ ±0.0ms');
     expect(formatMeanDelta(null)).toBe('δ —');
+  });
+});
+
+describe('δ histogram (SHOULD 13)', () => {
+  const CENTER = Math.floor(DELTA_HISTOGRAM_BUCKETS / 2);
+
+  it('buckets hits by signed delta; bucket edges are [lo, hi)', () => {
+    const stats = createPracticeStats(8);
+    stats.apply(0, hit(0)); // dead center
+    stats.apply(0, hit(4.9)); // still the center bucket [−5, +5)
+    stats.apply(0, hit(5)); // first late bucket [+5, +15)
+    stats.apply(0, hit(-5.1)); // first early bucket [−15, −5)
+    const loop = stats.finalizeLoop(0);
+    expect(loop.deltaHistogram[CENTER]).toBe(2);
+    expect(loop.deltaHistogram[CENTER + 1]).toBe(1);
+    expect(loop.deltaHistogram[CENTER - 1]).toBe(1);
+    expect(loop.deltaHistogram.reduce((a, b) => a + b, 0)).toBe(4);
+  });
+
+  it('clamps outliers into the edge buckets instead of dropping them', () => {
+    const stats = createPracticeStats(4);
+    stats.apply(0, hit(-240, 'BAD')); // far early — beyond the ±75ms range
+    stats.apply(0, hit(240, 'BAD')); // far late
+    const loop = stats.finalizeLoop(0);
+    expect(loop.deltaHistogram[0]).toBe(1);
+    expect(loop.deltaHistogram[DELTA_HISTOGRAM_BUCKETS - 1]).toBe(1);
+  });
+
+  it('ignores non-hit events (miss/empty poor have no delta)', () => {
+    const stats = createPracticeStats(2);
+    stats.apply(0, missPoor());
+    stats.apply(0, emptyPoor());
+    const loop = stats.finalizeLoop(0);
+    expect(loop.deltaHistogram.every((n) => n === 0)).toBe(true);
+  });
+
+  it('cumulative histogram sums finalized loops only', () => {
+    const stats = createPracticeStats(2);
+    stats.apply(0, hit(0));
+    stats.finalizeLoop(0);
+    stats.apply(1, hit(1));
+    stats.finalizeLoop(1);
+    stats.apply(2, hit(2)); // in progress — must not count
+    const total = stats.cumulative();
+    expect(total.deltaHistogram[CENTER]).toBe(2);
+    expect(total.deltaHistogram.reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
+  it('bucket width times count covers the documented ±range', () => {
+    expect(DELTA_HISTOGRAM_BUCKET_MS * DELTA_HISTOGRAM_BUCKETS).toBe(150);
+  });
+});
+
+describe('formatDeltaHistogram', () => {
+  it('is empty until a timed hit lands', () => {
+    expect(formatDeltaHistogram(new Array(DELTA_HISTOGRAM_BUCKETS).fill(0))).toBe('');
+  });
+
+  it('renders one column per bucket with the peak at full height', () => {
+    const histogram = new Array<number>(DELTA_HISTOGRAM_BUCKETS).fill(0);
+    histogram[7] = 8; // peak
+    histogram[8] = 4; // half height
+    histogram[0] = 1; // single stray hit must stay visible
+    const line = formatDeltaHistogram(histogram);
+    expect(line.startsWith('δ −75ms ')).toBe(true);
+    expect(line.endsWith(' +75ms')).toBe(true);
+    const bars = line.slice('δ −75ms '.length, -' +75ms'.length);
+    expect(bars).toHaveLength(DELTA_HISTOGRAM_BUCKETS);
+    expect(bars[7]).toBe('█');
+    expect(bars[8]).toBe('▄');
+    expect(bars[0]).toBe('▁');
+    expect(bars[3]).toBe(' ');
   });
 });

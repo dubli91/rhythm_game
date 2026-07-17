@@ -7,6 +7,7 @@ import {
   type LaneKeyEvent,
   type LaneKeyMap,
   type PlayControlEvent,
+  RESERVED_LANE_CODES,
   createPlayInput,
   isValidKeyMap,
 } from './input';
@@ -227,10 +228,31 @@ describe('createPlayInput', () => {
     expect(onControl).toHaveBeenCalledTimes(2);
 
     onControl.mockClear();
-    for (const code of ['PageUp', 'PageDown', 'Home', 'Escape']) {
+    for (const code of ['PageUp', 'PageDown', 'Home', 'Escape', 'F1']) {
       source.dispatch('keydown', makeEvent(code, { repeat: true }));
     }
     expect(onControl).not.toHaveBeenCalled();
+  });
+
+  it('emits devOverlayToggle on F1 (playfield-rendering.md SHOULD 16)', () => {
+    const { source, onControl, onLane, input } = makeHarness();
+    input.attach();
+
+    const event = makeEvent('F1', { timeStamp: 77 });
+    source.dispatch('keydown', event);
+    expect(onControl).toHaveBeenCalledExactlyOnceWith({
+      action: 'devOverlayToggle',
+      timeStampMs: 77,
+    });
+    // preventDefault so the browser's own F1 behavior (help) never fires in play.
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(onLane).not.toHaveBeenCalled();
+  });
+
+  it('reserves F1 alongside the six option codes (settings must refuse lane binds)', () => {
+    for (const code of ['Escape', 'PageUp', 'PageDown', 'Home', 'ArrowUp', 'ArrowDown', 'F1']) {
+      expect(RESERVED_LANE_CODES.has(code)).toBe(true);
+    }
   });
 
   it('control codes win over a key map that tries to bind them to a lane', () => {

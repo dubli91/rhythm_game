@@ -24,6 +24,7 @@ import {
 } from '../../lib/audio/sfx';
 import { CHART_FORMAT_VERSION, type Chart } from '../../lib/chart/types';
 import { createSongClock } from '../../lib/clock/audioClock';
+import { createDevOverlay } from './../play/devOverlay';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, createPlayInput } from './../play/input';
 import { type Judge, createJudge } from './../play/judgement';
 import { clampCover, stepCover, stepHiSpeed } from './../play/options';
@@ -52,6 +53,7 @@ import {
   type CumulativeStats,
   type LoopStats,
   createPracticeStats,
+  formatDeltaHistogram,
   formatMeanDelta,
 } from './stats';
 
@@ -175,6 +177,9 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
   let infoDirty = true;
   let infoString = '';
   let lastInfoLoopShown = -1;
+  // Dev overlay: same shared toggle as song play (F1), per-session metrics.
+  const devOverlay = createDevOverlay();
+  let lastDevMirrored = '';
 
   function flashOption(text: string): void {
     optionFlashText = text;
@@ -237,6 +242,8 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
       if (judge === undefined || judge === null) return;
       for (const miss of judge.advance(t)) dispatch(loopIndex, miss);
       dispatch(loopIndex, judge.onInput(e.lane, t));
+      // Keydown → judgement-processed delay (input-handling.md SHOULD 10).
+      devOverlay.recordInputLatency(performance.now() - e.timeStampMs);
     },
     onControl(e) {
       switch (e.action) {
@@ -266,6 +273,9 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
           infoDirty = true;
           break;
         }
+        case 'devOverlayToggle':
+          devOverlay.toggle();
+          break;
       }
     },
   });
@@ -317,6 +327,7 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     input.detach();
     sfx.cancelAll(); // clicks are ≤60ms buffers — no fade path needed
     renderer.destroy();
+    delete opts.mount.dataset.devOverlay;
     opts.onExit(buildOutcome(endedBy));
   }
 
@@ -340,12 +351,16 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
         `TOTAL  ACC ${total.exPercent.toFixed(1)}% · ${formatMeanDelta(total.meanDeltaMs)}`,
       );
       lines.push(`       BEST COMBO ${total.bestMaxCombo} · BP ${total.bp}`);
+      // δ distribution over all finalized loops (SHOULD 13); '' until a timed hit lands.
+      const histogramLine = formatDeltaHistogram(total.deltaHistogram);
+      if (histogramLine !== '') lines.push(histogramLine);
     }
     infoString = lines.join('\n');
   }
 
   function frame(): void {
     if (!running) return;
+    devOverlay.frameTick(performance.now());
     const t = clockSafeTime();
     const tSec = t / 1000;
 
@@ -419,6 +434,12 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     view.exScore = live.exScore;
     view.lastJudgement = lastJudgement;
     view.infoText = infoString;
+    const devText = devOverlay.text();
+    view.devText = devText;
+    if (devText !== lastDevMirrored) {
+      opts.mount.dataset.devOverlay = devText;
+      lastDevMirrored = devText;
+    }
     renderer.update(view);
 
     rafId = requestAnimationFrame(frame);

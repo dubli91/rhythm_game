@@ -28,7 +28,7 @@
 ### 내비게이션 — MUST
 
 9. 방향키로 섹션·항목 이동, Enter로 선택/토글/캡처 시작, Escape로 곡 선택 화면 복귀([input-handling](input-handling.md) SHOULD 11). 캡처 모드 중에는 Escape가 화면 이탈이 아니라 캡처 취소로 동작한다.
-10. 예약 키(`Escape`, `PageUp`, `PageDown`, `Home`, `ArrowUp`, `ArrowDown`)는 레인에 바인딩할 수 없다 — 플레이 중 옵션 조작에 쓰인다([play-options](play-options.md) MUST 3, 6). 캡처 중 이 키(Escape 제외)를 누르면 사유를 표시하며 거부하고, Escape는 사유 없이 캡처만 취소한다.
+10. 예약 키(`Escape`, `PageUp`, `PageDown`, `Home`, `ArrowUp`, `ArrowDown`, `F1`)는 레인에 바인딩할 수 없다 — 플레이 중 옵션 조작([play-options](play-options.md) MUST 3, 6)과 개발자 오버레이 토글([playfield-rendering](playfield-rendering.md) SHOULD 16, [input-handling](input-handling.md) SHOULD 10)에 쓰인다. 캡처 중 이 키(Escape 제외)를 누르면 사유를 표시하며 거부하고, Escape는 사유 없이 캡처만 취소한다.
 
 ### 저장·적용 — MUST
 
@@ -47,7 +47,7 @@
 - [ ] 오프셋을 변경한 직후(화면 이탈 없이) 플레이를 시작하면 변경된 오프셋이 적용된다.
 - [ ] localStorage를 비우거나 손상시킨 뒤 설정 화면을 열어도 앱이 죽지 않고 기본값이 표시된다.
 - [ ] 캡처 모드에서 Escape는 캡처만 취소한다; 캡처 모드가 아닐 때 Escape는 곡 선택으로 돌아간다.
-- [ ] 예약 키(PageUp/PageDown/Home/ArrowUp/ArrowDown/Escape)는 레인에 할당되지 않는다.
+- [ ] 예약 키(PageUp/PageDown/Home/ArrowUp/ArrowDown/Escape/F1)는 레인에 할당되지 않는다.
 - [ ] 새로고침 후에도 키 매핑·오프셋·볼륨이 유지된다.
 
 ## 의존 관계

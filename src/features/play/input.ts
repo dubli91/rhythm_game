@@ -43,9 +43,10 @@ export interface LaneKeyEvent {
 }
 
 // Non-gameplay in-play controls: quit (input-handling.md MUST 6) plus the
-// option-adjustment keys (play-options.md MUST 3/6). Extensible union — future
-// options (LIFT etc.) add variants here. bpmUp/bpmDown only fire when a screen
-// maps codes to them via extraControlCodes (practice-mode.md MUST 9).
+// option-adjustment keys (play-options.md MUST 3/6) and the dev-overlay toggle
+// (playfield-rendering.md SHOULD 16, input-handling.md SHOULD 10). Extensible
+// union — future options (LIFT etc.) add variants here. bpmUp/bpmDown only fire
+// when a screen maps codes to them via extraControlCodes (practice-mode.md MUST 9).
 export type PlayControlAction =
   | 'quit'
   | 'hiSpeedUp'
@@ -54,7 +55,8 @@ export type PlayControlAction =
   | 'coverUp'
   | 'coverDown'
   | 'bpmUp'
-  | 'bpmDown';
+  | 'bpmDown'
+  | 'devOverlayToggle';
 
 // Control keys take priority over lane keys so a custom key map can never
 // shadow them (settings-screen.md MUST 10 reserves these codes).
@@ -65,6 +67,7 @@ const CONTROL_CODES: ReadonlyMap<string, PlayControlAction> = new Map([
   ['Home', 'suddenToggle'],
   ['ArrowUp', 'coverUp'],
   ['ArrowDown', 'coverDown'],
+  ['F1', 'devOverlayToggle'],
 ]);
 
 /** Codes the settings key-config must refuse to bind to a lane (settings-screen.md

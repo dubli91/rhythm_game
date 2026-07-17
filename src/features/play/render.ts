@@ -63,6 +63,9 @@ export interface PlayFrameView {
   suddenPlusCover: number;
   /** Brief option-change readout, '' when nothing to show (play-options.md MUST 3). */
   optionFlashText: string;
+  /** Dev overlay block (FPS / frame / input latency), '' when hidden
+   *  (playfield-rendering.md SHOULD 16, input-handling.md SHOULD 10). */
+  devText?: string;
 }
 
 export interface PlayfieldRenderer {
@@ -126,6 +129,11 @@ export const RENDER_LAYOUT = {
   // Practice stats block (right of the playfield, clear of the HUD panel).
   INFO_X: 660,
   INFO_Y: 210,
+
+  // Dev overlay (SHOULD 16): panel column, below GREEN; the practice INFO block
+  // to its left never reaches this column.
+  DEV_X: 1050,
+  DEV_Y: 230,
 
   INITIAL_NOTE_POOL: 64,
 } as const;
@@ -423,6 +431,16 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     hudContainer.addChild(infoText);
   }
 
+  // Dev overlay block (playfield-rendering.md SHOULD 16): exists in both HUD
+  // modes, renders nothing while its string is empty.
+  const devText = new Text({
+    text: '',
+    style: { fill: 0x7fe07f, fontFamily: 'Arial', fontSize: 14, lineHeight: 20 },
+  });
+  devText.x = L.DEV_X;
+  devText.y = L.DEV_Y;
+  hudContainer.addChild(devText);
+
   // Song progress bar (top, full width).
   const progressFill = new Sprite(Texture.WHITE);
   progressFill.x = 0;
@@ -503,6 +521,7 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   let lastCoverShown = -1; // -1 = hidden
   let lastOptionFlashShown = '';
   let lastInfoShown = '';
+  let lastDevShown = '';
   let destroyed = false;
 
   function noteY(beat: number, currentBeat: number, hiSpeed: number): number {
@@ -690,6 +709,13 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     if (infoText !== null && info !== lastInfoShown) {
       infoText.text = info;
       lastInfoShown = info;
+    }
+
+    // Dev overlay (SHOULD 16): controller owns the metrics, renderer mirrors the string.
+    const dev = view.devText ?? '';
+    if (dev !== lastDevShown) {
+      devText.text = dev;
+      lastDevShown = dev;
     }
 
     // Numeric HUD (update-on-change).

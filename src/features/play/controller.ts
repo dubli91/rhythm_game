@@ -11,6 +11,7 @@ import { computeNoteTimesMs, createTimingIndex } from '../../lib/chart/timing';
 import type { Chart, Song } from '../../lib/chart/types';
 import { createSongClock } from '../../lib/clock/audioClock';
 import { applyArrangement } from './arrange';
+import { createDevOverlay } from './devOverlay';
 import { type ClearLamp, clearLampFor, createGauge } from './gauge';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, createPlayInput } from './input';
 import { createJudge } from './judgement';
@@ -163,6 +164,11 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   // the audio clock stays reserved for anything that touches judgement.
   let optionFlashText = '';
   let optionFlashUntilMs = 0;
+  // Dev overlay (SHOULD 16 / input-handling SHOULD 10): metrics are per-session,
+  // visibility is page-global (survives retries). Mirrored onto the mount's
+  // dataset because e2e cannot read canvas text.
+  const devOverlay = createDevOverlay();
+  let lastDevMirrored = '';
 
   function flashOption(text: string): void {
     optionFlashText = text;
@@ -217,6 +223,10 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
       for (const miss of judge.advance(t)) dispatch(miss);
       if (e.down) {
         dispatch(judge.onInput(e.lane, t));
+        // Keydown → judgement-processed delay (input-handling.md SHOULD 10):
+        // event.timeStamp and performance.now() share a time base. Diagnostic
+        // only — the judgement above already used the event time.
+        devOverlay.recordInputLatency(performance.now() - e.timeStampMs);
       } else {
         // CN tail resolution (judgement-scoring.md SHOULD 12); null for the common
         // keyup-after-a-tap case, which must stay free of penalties.
@@ -246,6 +256,9 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
           suddenCover = stepCover(suddenCover, e.action === 'coverUp' ? 1 : -1);
           flashOption(`SUDDEN+ ${suddenCover}%`);
           break;
+        case 'devOverlayToggle':
+          devOverlay.toggle();
+          break;
       }
     },
   });
@@ -256,6 +269,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     cancelAnimationFrame(rafId);
     input.detach();
     renderer.destroy();
+    delete opts.mount.dataset.devOverlay;
   }
 
   function buildResult(endProgress: number, finishedSong: boolean): PlayResult {
@@ -318,6 +332,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
 
   function frame(): void {
     if (!running) return;
+    devOverlay.frameTick(performance.now());
     const t = clockSafeTime();
 
     if (!ending) {
@@ -368,6 +383,12 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     view.combo = score.combo;
     view.exScore = score.exScore;
     view.lastJudgement = lastJudgement;
+    const devText = devOverlay.text();
+    view.devText = devText;
+    if (devText !== lastDevMirrored) {
+      opts.mount.dataset.devOverlay = devText;
+      lastDevMirrored = devText;
+    }
     renderer.update(view);
 
     rafId = requestAnimationFrame(frame);
