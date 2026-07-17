@@ -25,7 +25,7 @@
           "chartPath": "songs/song-6f90aea6/chart-hyper.json"
         }
       ],
-      "audio": "songs/song-6f90aea6/audio.wav",
+      "audio": "songs/song-6f90aea6/audio.ogg",
       "offsetMs": 0,
       "preview": {
         "startMs": 25600,
@@ -58,7 +58,7 @@
           "chartPath": "songs/song-720e0160/chart-hyper.json"
         }
       ],
-      "audio": "songs/song-720e0160/audio.wav",
+      "audio": "songs/song-720e0160/audio.ogg",
       "offsetMs": 0,
       "preview": {
         "startMs": 28000,
@@ -91,7 +91,7 @@
           "chartPath": "songs/song-e09aa1a6/chart-another.json"
         }
       ],
-      "audio": "songs/song-e09aa1a6/audio.wav",
+      "audio": "songs/song-e09aa1a6/audio.ogg",
       "offsetMs": 0,
       "preview": {
         "startMs": 36000,

@@ -33,7 +33,6 @@ import {
   createBeatClock,
   createSeededRng,
   deriveSongId,
-  encodeWav16Stereo,
   normalizeAndAssertPeak,
   noteFreq,
   synthBassNote,
@@ -415,7 +414,6 @@ export function buildNeonCascade() {
   });
 
   const measuredPeak = normalizeAndAssertPeak(left, right, 'neon-cascade');
-  const wav = encodeWav16Stereo(left, right, SAMPLE_RATE);
 
   // --- charts ---
   const events = { kickBeats, snareBeats, hatBeats, bassEvents, arpEvents, leadEvents };
@@ -492,7 +490,7 @@ export function buildNeonCascade() {
           chartPath: `songs/${SONG_ID}/chart-hyper.json`,
         },
       ],
-      audio: `songs/${SONG_ID}/audio.wav`,
+      audio: `songs/${SONG_ID}/audio.ogg`,
       offsetMs: 0,
       preview: { startMs: 28000, durationMs: 10000 },
       license:
@@ -502,12 +500,12 @@ export function buildNeonCascade() {
       { filename: 'chart-normal.json', chart: chartNormal },
       { filename: 'chart-hyper.json', chart: chartHyper },
     ],
-    wav,
+    pcm: { left, right, sampleRate: SAMPLE_RATE },
     summary: [
       `chartId (normal): ${CHART_ID_NORMAL}  notes=${chartNormal.notes.length}  total=${chartNormal.total}  cn=${chartNormal.notes.filter((n) => n.type === 'cn').length}`,
       `chartId (hyper):  ${CHART_ID_HYPER}  notes=${chartHyper.notes.length}  total=${chartHyper.total}  cn=${chartHyper.notes.filter((n) => n.type === 'cn').length}`,
       `bpm map: 140 -> 175 @ beat ${DROP_BEAT} (with ${STOP_BEATS}-beat STOP) -> 140 @ beat ${OUTRO_BEAT}`,
-      `audio: ${MUSIC_SECONDS.toFixed(3)}s music + ${TAIL_SECONDS}s tail, ${wav.length} bytes`,
+      `audio: ${MUSIC_SECONDS.toFixed(3)}s music + ${TAIL_SECONDS}s tail`,
       `normalized peak: ${measuredPeak.toFixed(6)}`,
     ],
   };

@@ -338,45 +338,51 @@ export function normalizeAndAssertPeak(left, right, label) {
   return measuredPeak;
 }
 
-// --- WAV encoding (16-bit PCM stereo, 44-byte RIFF header, inline) --------------
+// --- ogg vorbis encoding (builtin-song-content.md MUST 9) -----------------------
+// wasm-media-encoders bundles libvorbis compiled to WASM, so this plain node
+// script can emit real ogg vorbis with no system ffmpeg. The ogg stream serial
+// is FIXED (libvorbis normally randomizes it) — that plus the deterministic
+// synth input is what keeps regeneration byte-identical.
 
-function floatToInt16(sample) {
-  const clamped = Math.max(-1, Math.min(1, sample));
-  return Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767);
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { createEncoder } from 'wasm-media-encoders';
+
+/** libvorbis VBR quality (-1..10); 5 ≈ 160kbps — transparent for these synth tracks. */
+export const OGG_VBR_QUALITY = 5;
+const OGG_SERIAL_NO = 0x69697831; // arbitrary but FIXED: byte-identical re-runs
+
+let oggEncoderPromise = null;
+function getOggEncoder() {
+  if (oggEncoderPromise === null) {
+    // The convenience createOggEncoder() resolves its wasm via fetch(); load the
+    // bytes through node's module resolution instead so this works offline.
+    const require = createRequire(import.meta.url);
+    const wasmPath = require.resolve('wasm-media-encoders/wasm/ogg.wasm');
+    oggEncoderPromise = createEncoder('audio/ogg', readFileSync(wasmPath));
+  }
+  return oggEncoderPromise;
 }
 
-export function encodeWav16Stereo(leftCh, rightCh, sampleRate) {
-  const numFrames = leftCh.length;
-  const numChannels = 2;
-  const bytesPerSample = 2;
-  const blockAlign = numChannels * bytesPerSample;
-  const byteRate = sampleRate * blockAlign;
-  const dataSize = numFrames * blockAlign;
-  const fileSize = 44 + dataSize;
-
-  const buffer = Buffer.alloc(fileSize);
-  buffer.write('RIFF', 0, 'ascii');
-  buffer.writeUInt32LE(fileSize - 8, 4);
-  buffer.write('WAVE', 8, 'ascii');
-  buffer.write('fmt ', 12, 'ascii');
-  buffer.writeUInt32LE(16, 16); // fmt chunk size
-  buffer.writeUInt16LE(1, 20); // PCM
-  buffer.writeUInt16LE(numChannels, 22);
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(byteRate, 28);
-  buffer.writeUInt16LE(blockAlign, 32);
-  buffer.writeUInt16LE(16, 34); // bits per sample
-  buffer.write('data', 36, 'ascii');
-  buffer.writeUInt32LE(dataSize, 40);
-
-  let offset = 44;
-  for (let frame = 0; frame < numFrames; frame++) {
-    buffer.writeInt16LE(floatToInt16(leftCh[frame]), offset);
-    offset += 2;
-    buffer.writeInt16LE(floatToInt16(rightCh[frame]), offset);
-    offset += 2;
+export async function encodeOggVorbisStereo(leftCh, rightCh, sampleRate) {
+  const encoder = await getOggEncoder();
+  encoder.configure({
+    channels: 2,
+    sampleRate,
+    vbrQuality: OGG_VBR_QUALITY,
+    oggSerialNo: OGG_SERIAL_NO,
+  });
+  const chunks = [];
+  // Feed in slabs to bound the wasm-side PCM buffer; encode() returns a view
+  // into wasm memory that the next call invalidates, so copy every chunk.
+  const SLAB_FRAMES = 128 * 1024;
+  for (let offset = 0; offset < leftCh.length; offset += SLAB_FRAMES) {
+    const end = Math.min(offset + SLAB_FRAMES, leftCh.length);
+    const chunk = encoder.encode([leftCh.subarray(offset, end), rightCh.subarray(offset, end)]);
+    if (chunk.length > 0) chunks.push(Uint8Array.from(chunk));
   }
-  return buffer;
+  chunks.push(Uint8Array.from(encoder.finalize()));
+  return Buffer.concat(chunks);
 }
 
 // --- chart helpers ----------------------------------------------------------------

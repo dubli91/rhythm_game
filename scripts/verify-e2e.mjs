@@ -128,38 +128,41 @@ await step('mash keys during play (real input path)', async () => {
   await page.screenshot({ path: SHOT('4-play-mash') });
 });
 
-await step('dev overlay: F1 toggles FPS + input-latency readout (SHOULD 16 / SHOULD 10)', async () => {
-  // The overlay text is canvas-drawn, so the controller mirrors it onto the
-  // play mount's data-dev-overlay attribute (same pattern as preview state).
-  const before = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.devOverlay ?? '');
-  if (before !== '') throw new Error(`overlay visible before toggle: ${JSON.stringify(before)}`);
-  await page.keyboard.press('F1');
-  // FPS publishes after a 500ms window; wait for a real figure, not the — placeholder.
-  await page.waitForFunction(
-    () => {
-      const text = document.querySelector('[data-screen="PLAY"]')?.dataset?.devOverlay ?? '';
-      return /FPS \d/.test(text) && text.includes('FRAME ');
-    },
-    { timeout: 5000 },
-  );
-  // A real keypress must produce a latency sample (keydown → judgement processed).
-  await page.keyboard.press('KeyJ');
-  await page.waitForFunction(
-    () => {
-      const text = document.querySelector('[data-screen="PLAY"]')?.dataset?.devOverlay ?? '';
-      return /INPUT \d+\.\dms/.test(text) && /AVG \d+\.\dms \(\d+\)/.test(text);
-    },
-    { timeout: 5000 },
-  );
-  const overlay = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.devOverlay);
-  console.log(`  overlay: ${overlay.replace(/\n/g, ' | ')}`);
-  await page.screenshot({ path: SHOT('4b-dev-overlay') });
-  await page.keyboard.press('F1');
-  await page.waitForFunction(
-    () => (document.querySelector('[data-screen="PLAY"]')?.dataset?.devOverlay ?? '') === '',
-    { timeout: 5000 },
-  );
-});
+await step(
+  'dev overlay: F1 toggles FPS + input-latency readout (SHOULD 16 / SHOULD 10)',
+  async () => {
+    // The overlay text is canvas-drawn, so the controller mirrors it onto the
+    // play mount's data-dev-overlay attribute (same pattern as preview state).
+    const before = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.devOverlay ?? '');
+    if (before !== '') throw new Error(`overlay visible before toggle: ${JSON.stringify(before)}`);
+    await page.keyboard.press('F1');
+    // FPS publishes after a 500ms window; wait for a real figure, not the — placeholder.
+    await page.waitForFunction(
+      () => {
+        const text = document.querySelector('[data-screen="PLAY"]')?.dataset?.devOverlay ?? '';
+        return /FPS \d/.test(text) && text.includes('FRAME ');
+      },
+      { timeout: 5000 },
+    );
+    // A real keypress must produce a latency sample (keydown → judgement processed).
+    await page.keyboard.press('KeyJ');
+    await page.waitForFunction(
+      () => {
+        const text = document.querySelector('[data-screen="PLAY"]')?.dataset?.devOverlay ?? '';
+        return /INPUT \d+\.\dms/.test(text) && /AVG \d+\.\dms \(\d+\)/.test(text);
+      },
+      { timeout: 5000 },
+    );
+    const overlay = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.devOverlay);
+    console.log(`  overlay: ${overlay.replace(/\n/g, ' | ')}`);
+    await page.screenshot({ path: SHOT('4b-dev-overlay') });
+    await page.keyboard.press('F1');
+    await page.waitForFunction(
+      () => (document.querySelector('[data-screen="PLAY"]')?.dataset?.devOverlay ?? '') === '',
+      { timeout: 5000 },
+    );
+  },
+);
 
 await step('Escape abandons -> RESULTS with give-up', async () => {
   await page.keyboard.press('Escape');

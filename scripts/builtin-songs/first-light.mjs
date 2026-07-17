@@ -20,7 +20,6 @@ import {
   computeTotal,
   createSeededRng,
   deriveSongId,
-  encodeWav16Stereo,
   normalizeAndAssertPeak,
   noteFreq,
   synthBassNote,
@@ -375,7 +374,6 @@ export function buildFirstLight() {
   });
 
   const measuredPeak = normalizeAndAssertPeak(left, right, 'first-light');
-  const wav = encodeWav16Stereo(left, right, SAMPLE_RATE);
 
   // --- charts ---
   const events = { kickBeats, snareBeats, hatBeats, bassEvents, leadEvents };
@@ -446,7 +444,7 @@ export function buildFirstLight() {
           chartPath: `songs/${SONG_ID}/chart-hyper.json`,
         },
       ],
-      audio: `songs/${SONG_ID}/audio.wav`,
+      audio: `songs/${SONG_ID}/audio.ogg`,
       offsetMs: 0,
       preview: { startMs: 25600, durationMs: 10000 },
       license:
@@ -456,11 +454,11 @@ export function buildFirstLight() {
       { filename: 'chart-normal.json', chart: chartNormal },
       { filename: 'chart-hyper.json', chart: chartHyper },
     ],
-    wav,
+    pcm: { left, right, sampleRate: SAMPLE_RATE },
     summary: [
       `chartId (normal): ${CHART_ID_NORMAL}  notes=${chartNormal.notes.length}  total=${chartNormal.total}`,
       `chartId (hyper):  ${CHART_ID_HYPER}  notes=${chartHyper.notes.length}  total=${chartHyper.total}`,
-      `audio: ${MUSIC_SECONDS}s music + ${TAIL_SECONDS}s tail = ${TOTAL_SECONDS}s, ${wav.length} bytes`,
+      `audio: ${MUSIC_SECONDS}s music + ${TAIL_SECONDS}s tail = ${TOTAL_SECONDS}s`,
       `normalized peak: ${measuredPeak.toFixed(6)}`,
     ],
   };

@@ -33,64 +33,60 @@ function deriveSongId(title: string, artist: string): string {
   return `song-${fnv1a32(key).toString(16).padStart(8, '0')}`;
 }
 
-// --- minimal WAV header parsing -------------------------------------------------
+// --- minimal ogg vorbis header parsing --------------------------------------------
+// Validates spec MUST 9 (ogg vorbis, 44.1kHz stereo) without a decoder: the first
+// ogg page's first packet is the Vorbis identification header (channels +
+// sample rate), and the granule position of the final page is the total PCM
+// frame count, which yields the duration exactly (vorbis granules are
+// sample-accurate). Peak level (-1dBFS) is enforced at generation time by
+// normalizeAndAssertPeak in scripts/builtin-songs/lib.mjs — a lossy file can't
+// be re-checked bit-exactly here.
 
-interface WavInfo {
-  isPcm: boolean;
-  bitsPerSample: number;
+interface OggVorbisInfo {
   sampleRate: number;
   numChannels: number;
   durationMs: number;
 }
 
-function parseWavHeader(buffer: Buffer): WavInfo {
-  if (buffer.length < 44) {
-    throw new Error('WAV file too small to contain a valid header');
-  }
-  const riff = buffer.toString('ascii', 0, 4);
-  const wave = buffer.toString('ascii', 8, 12);
-  if (riff !== 'RIFF' || wave !== 'WAVE') {
-    throw new Error(`Not a RIFF/WAVE file (got "${riff}"/"${wave}")`);
+function parseOggVorbis(buffer: Buffer): OggVorbisInfo {
+  if (buffer.length < 58 || buffer.toString('ascii', 0, 4) !== 'OggS') {
+    throw new Error('Not an ogg stream (missing OggS capture pattern)');
   }
 
-  // Walk chunks after the 12-byte RIFF/WAVE header to find 'fmt ' and 'data'.
-  let offset = 12;
-  let audioFormat = -1;
-  let numChannels = -1;
-  let sampleRate = -1;
-  let bitsPerSample = -1;
-  let dataSize = -1;
+  // First page payload = Vorbis identification header: 0x01 'vorbis', version(4),
+  // channels(1), sampleRate(4 LE).
+  const firstSegments = buffer.readUInt8(26);
+  const payload = 27 + firstSegments;
+  if (
+    buffer.readUInt8(payload) !== 0x01 ||
+    buffer.toString('ascii', payload + 1, payload + 7) !== 'vorbis'
+  ) {
+    throw new Error('First ogg packet is not a vorbis identification header');
+  }
+  const numChannels = buffer.readUInt8(payload + 11);
+  const sampleRate = buffer.readUInt32LE(payload + 12);
 
-  while (offset + 8 <= buffer.length) {
-    const chunkId = buffer.toString('ascii', offset, offset + 4);
-    const chunkSize = buffer.readUInt32LE(offset + 4);
-    const chunkStart = offset + 8;
-    if (chunkId === 'fmt ') {
-      audioFormat = buffer.readUInt16LE(chunkStart);
-      numChannels = buffer.readUInt16LE(chunkStart + 2);
-      sampleRate = buffer.readUInt32LE(chunkStart + 4);
-      bitsPerSample = buffer.readUInt16LE(chunkStart + 14);
-    } else if (chunkId === 'data') {
-      dataSize = chunkSize;
+  // Walk every page (never search for 'OggS' — the byte pattern can occur inside
+  // payload data); the last page's granule position = total PCM frames.
+  let offset = 0;
+  let lastGranule = 0n;
+  while (offset + 27 <= buffer.length) {
+    if (buffer.toString('ascii', offset, offset + 4) !== 'OggS') {
+      throw new Error(`ogg page boundary mismatch at byte ${offset}`);
     }
-    offset = chunkStart + chunkSize + (chunkSize % 2);
+    lastGranule = buffer.readBigUInt64LE(offset + 6);
+    const segments = buffer.readUInt8(offset + 26);
+    let payloadLength = 0;
+    for (let i = 0; i < segments; i++) {
+      payloadLength += buffer.readUInt8(offset + 27 + i);
+    }
+    offset += 27 + segments + payloadLength;
+  }
+  if (offset !== buffer.length) {
+    throw new Error('ogg stream has trailing bytes after the final page');
   }
 
-  if (audioFormat === -1 || dataSize === -1) {
-    throw new Error('WAV file missing fmt or data chunk');
-  }
-
-  const blockAlign = numChannels * (bitsPerSample / 8);
-  const numFrames = dataSize / blockAlign;
-  const durationMs = (numFrames / sampleRate) * 1000;
-
-  return {
-    isPcm: audioFormat === 1,
-    bitsPerSample,
-    sampleRate,
-    numChannels,
-    durationMs,
-  };
+  return { sampleRate, numChannels, durationMs: (Number(lastGranule) / sampleRate) * 1000 };
 }
 
 // --- load + validate the catalog once -------------------------------------------
@@ -113,12 +109,11 @@ describe('built-in song catalog', () => {
   describe.each(catalog.songs)('song $songId ($title by $artist)', (song: CatalogSongEntry) => {
     const audioPath = join(PUBLIC_DIR, song.audio);
 
-    it('has an audio file that exists and parses as 16-bit PCM 44.1kHz stereo', () => {
+    it('has an audio file that exists and parses as ogg vorbis 44.1kHz stereo (MUST 9)', () => {
       expect(existsSync(audioPath)).toBe(true);
+      expect(song.audio.endsWith('.ogg')).toBe(true);
       const buffer = readFileSync(audioPath);
-      const info = parseWavHeader(buffer);
-      expect(info.isPcm).toBe(true);
-      expect(info.bitsPerSample).toBe(16);
+      const info = parseOggVorbis(buffer);
       expect(info.sampleRate).toBe(44100);
       expect(info.numChannels).toBe(2);
     });
@@ -157,7 +152,7 @@ describe('built-in song catalog', () => {
 
         // The audio must contain the whole chart, plus at least a 1s tail.
         const audioBuffer = readFileSync(audioPath);
-        const audioInfo = parseWavHeader(audioBuffer);
+        const audioInfo = parseOggVorbis(audioBuffer);
         const lastTimeMs = times.reduce((max, t) => Math.max(max, t), 0);
         expect(lastTimeMs + 1000).toBeLessThan(audioInfo.durationMs);
       },

@@ -3,7 +3,7 @@
 // each song module under scripts/builtin-songs/ synthesizes its track and
 // authors its charts from the SAME pattern data (so notes line up with
 // audible events), and this entry point writes
-// public/songs/<songId>/{chart-*.json,audio.wav} plus the merged
+// public/songs/<songId>/{chart-*.json,audio.ogg} plus the merged
 // public/songs/index.json catalog.
 //
 // Songs (MUST 1-4 coverage):
@@ -15,21 +15,19 @@
 //   "Overdrive Core" (Redline Theory) — HYPER ☆9 / ANOTHER ☆11, constant
 //                                    185 BPM (the MUST 1 high-level band).
 //
-// AUDIO FORMAT NOTE: specs/builtin-song-content.md MUST 9 asks for ogg vorbis.
-// No ogg/vorbis encoder is available in this environment, so this script ships
-// 16-bit PCM WAV (44.1kHz stereo, peak-normalized to -1dBFS) instead.
-// decodeAudioData() handles WAV natively. TODO: swap in an ogg encoder
-// (e.g. run through a WASM vorbis encoder) once available, without changing
-// the note-timing pipeline.
+// AUDIO: ogg vorbis 44.1kHz stereo, peak-normalized to -1dBFS (spec MUST 9),
+// encoded with wasm-media-encoders (libvorbis in WASM — no system ffmpeg needed).
 //
 // Deterministic and re-runnable: no Math.random anywhere; seeded mulberry32
-// PRNGs are used for noise-layer texture so re-running this script
-// byte-for-byte reproduces every audio.wav and chart JSON.
+// PRNGs are used for noise-layer texture, and the ogg stream serial is fixed
+// (see lib.mjs), so re-running this script byte-for-byte reproduces every
+// audio.ogg and chart JSON.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildFirstLight } from './builtin-songs/first-light.mjs';
+import { encodeOggVorbisStereo } from './builtin-songs/lib.mjs';
 import { buildNeonCascade } from './builtin-songs/neon-cascade.mjs';
 import { buildOverdriveCore } from './builtin-songs/overdrive-core.mjs';
 
@@ -53,7 +51,10 @@ for (const song of songs) {
   for (const { filename, chart } of song.chartFiles) {
     writeFileSync(join(songDir, filename), `${JSON.stringify(chart, null, 2)}\n`);
   }
-  writeFileSync(join(songDir, 'audio.wav'), song.wav);
+  const ogg = await encodeOggVorbisStereo(song.pcm.left, song.pcm.right, song.pcm.sampleRate);
+  writeFileSync(join(songDir, 'audio.ogg'), ogg);
+  song.summary.push(`encoded: audio.ogg ${ogg.length} bytes`);
+  rmSync(join(songDir, 'audio.wav'), { force: true }); // pre-ogg leftover
 }
 
 const index = { songs: songs.map((song) => song.entry) };

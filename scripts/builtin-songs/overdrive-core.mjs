@@ -22,7 +22,6 @@ import {
   computeTotal,
   createSeededRng,
   deriveSongId,
-  encodeWav16Stereo,
   normalizeAndAssertPeak,
   noteFreq,
   synthBassNote,
@@ -318,7 +317,6 @@ export function buildOverdriveCore() {
   });
 
   const measuredPeak = normalizeAndAssertPeak(left, right, 'overdrive-core');
-  const wav = encodeWav16Stereo(left, right, SAMPLE_RATE);
 
   // --- charts ---
   const events = { kickBeats, snareBeats, hatBeats, bassEvents, riffEvents, stabEvents };
@@ -391,7 +389,7 @@ export function buildOverdriveCore() {
           chartPath: `songs/${SONG_ID}/chart-another.json`,
         },
       ],
-      audio: `songs/${SONG_ID}/audio.wav`,
+      audio: `songs/${SONG_ID}/audio.ogg`,
       offsetMs: 0,
       preview: { startMs: 36000, durationMs: 10000 },
       license:
@@ -401,11 +399,11 @@ export function buildOverdriveCore() {
       { filename: 'chart-hyper.json', chart: chartHyper },
       { filename: 'chart-another.json', chart: chartAnother },
     ],
-    wav,
+    pcm: { left, right, sampleRate: SAMPLE_RATE },
     summary: [
       `chartId (hyper):   ${CHART_ID_HYPER}  notes=${chartHyper.notes.length}  total=${chartHyper.total}`,
       `chartId (another): ${CHART_ID_ANOTHER}  notes=${chartAnother.notes.length}  total=${chartAnother.total}`,
-      `audio: ${MUSIC_SECONDS.toFixed(3)}s music + ${TAIL_SECONDS}s tail, ${wav.length} bytes`,
+      `audio: ${MUSIC_SECONDS.toFixed(3)}s music + ${TAIL_SECONDS}s tail`,
       `normalized peak: ${measuredPeak.toFixed(6)}`,
     ],
   };
