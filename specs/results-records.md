@@ -37,8 +37,8 @@
 
 ### SHOULD
 
-10. 기록 전체 JSON 내보내기/가져오기 (브라우저·기기 이전용).
-11. 플레이어 통계 화면: 총 플레이 수, 램프 분포, 레벨별 클리어 현황.
+10. 기록 전체 JSON 내보내기/가져오기 (브라우저·기기 이전용). 기존 기록이 있는 브라우저로 가져오면 차트별(MUST 4의 `songId`+`chartId` 키)로 필드 단위 최선값 병합을 하여 로컬 진행도를 절대 낮추지 않는다: `clearLamp`는 상위 램프, `bestExScore`는 높은 값(각각 이긴 쪽의 rank·배치 유지), `minBP`는 낮은 값, `playCount`는 두 값의 최대치(합산이 아님 — 같은 파일을 두 번 가져와도 중복 집계되지 않게), `lastPlayedAt`는 더 나중 값을 택한다. 이 병합은 멱등이므로 같은 파일을 재차 가져와도 결과가 동일하고, 로컬 라이브러리에 없는 곡의 기록도 그대로 가져온다(기록은 이 키로 라이브러리와 독립).
+11. 플레이어 통계(총 플레이 수, 램프 분포, 레벨별 클리어 현황)는 별도 화면 상태가 아니라 설정 화면 내 기록 섹션의 인-설정 모달로 제공한다([settings-screen](settings-screen.md) SHOULD 13 참조) — 오프셋 보정 진입처럼 설정 화면 안에서 처리하며 app-shell-navigation의 화면 열거형은 그대로 둔다.
 12. songId를 결정적으로 생성(제목+아티스트 해시 등)해, 내장 곡 자산을 재빌드하거나 카탈로그를 재구성해도 기존 기록이 같은 곡에 다시 연결되게 한다.
 
 ## 수용 기준
@@ -48,8 +48,9 @@
 - [ ] FULL COMBO 시 램프가 FULL COMBO로 갱신된다 (사용 게이지와 무관하게 최상위).
 - [ ] 새로고침·브라우저 재시작 후에도 기록이 유지된다.
 - [ ] 내보낸 JSON을 초기화된 브라우저에서 가져오면 기록이 완전 복원된다.
+- [ ] 같은 파일을 두 번 가져와도 기록은 한 번 가져온 것과 동일하며, 가져오기가 기존 램프·`bestExScore`를 낮추지 않는다.
 
 ## 의존 관계
 
 - 입력: [judgement-scoring](judgement-scoring.md) 집계, [gauge-clear](gauge-clear.md) 클리어 결과, [play-options](play-options.md) 사용 옵션
-- 소비자: [song-select](song-select.md)의 램프·베스트 표시
+- 소비자: [song-select](song-select.md)의 램프·베스트 표시, [settings-screen](settings-screen.md) 기록 섹션의 통계·내보내기/가져오기 진입(SHOULD 10-11)

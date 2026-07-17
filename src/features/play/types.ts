@@ -45,6 +45,10 @@ export const GAUGE_TYPES: readonly GaugeType[] = [
 
 export type DjRank = 'AAA' | 'AA' | 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
 
+/** Runtime list matching the DjRank union — canonical for validating external data
+ * (e.g. imported record JSON); scoring.ts owns the thresholds, not the membership. */
+export const DJ_RANKS: readonly DjRank[] = ['AAA', 'AA', 'A', 'B', 'C', 'D', 'E', 'F'];
+
 /** Lane-arrangement play option (play-options.md MUST 9-10). Results/records have carried
  * the field since before gameplay support existed so record schemas never migrate. */
 export type Arrangement = 'OFF' | 'RANDOM' | 'MIRROR';

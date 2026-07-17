@@ -7,6 +7,7 @@
 import { type KeyValueStorage, STORAGE_KEYS, createLocalDoc } from '../../lib/storage/local';
 import { CLEAR_LAMP_ORDER, type ClearLamp } from '../play/gauge';
 import type { Arrangement, DjRank } from '../play/types';
+import { mergeRecords, parseRecordsExport, serializeRecordsExport } from './transfer';
 
 // Arrangement (RANDOM/MIRROR lane-arrangement option) is defined in ../play/types —
 // see that file for why the record schema retains it ahead of Milestone 6 gameplay
@@ -161,11 +162,19 @@ export function applyPlay(
   return { data: { records }, outcome };
 }
 
+export type RecordsImportOutcome =
+  | { ok: true; added: number; improved: number; unchanged: number }
+  | { ok: false; error: string };
+
 export interface RecordsStore {
   // applies + writes doc exactly once; null for autoplay (no write)
   recordPlay(play: RecordablePlay, nowIso: string): RecordUpdateOutcome | null;
   getRecord(songId: string, chartId: string): ChartRecord | null;
   all(): RecordsData;
+  /** results-records.md SHOULD 10 — the export file IS the records.v1 envelope. */
+  exportJson(): string;
+  /** Validates then best-merges (see transfer.ts); writes only when something changed. */
+  importJson(text: string): RecordsImportOutcome;
 }
 
 export interface OpenRecordsStoreOptions {
@@ -235,5 +244,28 @@ export function openRecordsStore(opts: OpenRecordsStoreOptions): RecordsStore {
     return doc.read();
   }
 
-  return { recordPlay, getRecord, all };
+  function exportJson(): string {
+    return serializeRecordsExport(doc.read());
+  }
+
+  function importJson(text: string): RecordsImportOutcome {
+    const parsed = parseRecordsExport(text);
+    if (!parsed.ok) {
+      return { ok: false, error: parsed.error };
+    }
+    const merged = mergeRecords(doc.read(), parsed.data);
+    // Skip the write when nothing changed (re-importing the same file) — the
+    // stored bytes stay byte-identical, which also keeps e2e assertions simple.
+    if (merged.added > 0 || merged.improved > 0) {
+      doc.write(merged.data);
+    }
+    return {
+      ok: true,
+      added: merged.added,
+      improved: merged.improved,
+      unchanged: merged.unchanged,
+    };
+  }
+
+  return { recordPlay, getRecord, all, exportJson, importJson };
 }

@@ -23,6 +23,7 @@ import { startPracticeSession } from '../features/practice/controller';
 import { type PracticeEditor, createPracticeEditor } from '../features/practice/editor';
 import type { PracticePattern } from '../features/practice/pattern';
 import { formatMeanDelta } from '../features/practice/stats';
+import { type StatsChartRef, aggregatePlayerStats } from '../features/records/stats';
 import { type RecordUpdateOutcome, openRecordsStore } from '../features/records/store';
 import {
   type PlayRequest,
@@ -185,6 +186,9 @@ const STYLES = `
   .settings-modal-title { color: #7df3ff; letter-spacing: 0.2em; font-size: 15px; margin-bottom: 14px; }
   .settings-modal-body { display: grid; gap: 8px; font-size: 14px; margin-bottom: 12px; }
   .settings-cal-count { font-size: 30px; font-weight: 800; color: #ffe066; }
+  .settings-stats-card { min-width: 440px; max-height: 82vh; overflow-y: auto; }
+  .settings-stats-lamps, .settings-stats-levels { display: grid; gap: 4px; text-align: left; margin-top: 8px; }
+  .settings-stats-row { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; border-bottom: 1px solid #1c1c2e; padding: 3px 0; }
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -596,6 +600,17 @@ export function bootShell(root: HTMLElement): void {
   // --- SETTINGS (settings-screen.md; entry per song-select.md MUST 10) ---
   let settingsScreen: SettingsScreen | null = null;
 
+  /** Chart list for stats aggregation — records don't store levels, the library does. */
+  function libraryChartRefs(): StatsChartRef[] {
+    return (library?.entries ?? []).flatMap((entry) =>
+      entry.charts.map((chart) => ({
+        songId: entry.songId,
+        chartId: chart.chartId,
+        level: chart.level,
+      })),
+    );
+  }
+
   function ensureSettingsScreen(): SettingsScreen {
     if (settingsScreen === null) {
       settingsScreen = createSettingsScreen({
@@ -603,6 +618,13 @@ export function bootShell(root: HTMLElement): void {
         values: settings,
         onPersist: saveSettings,
         applyVolumes: (volumes) => gameAudio?.setVolumes(volumes),
+        records: {
+          stats: () => aggregatePlayerStats(recordsStore.all(), libraryChartRefs()),
+          exportJson: () => recordsStore.exportJson(),
+          importJson: (text) => recordsStore.importJson(text),
+        },
+        // Select rows read records live on render, so one re-render refreshes lamps.
+        onRecordsImported: () => renderSelectList(),
         getAudio: () =>
           gameAudio === null || audioCtx === null
             ? null

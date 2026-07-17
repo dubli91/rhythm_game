@@ -34,7 +34,10 @@ export type SettingsRow =
   | { kind: 'resetAll' }
   | { kind: 'offset' }
   | { kind: 'volume'; channel: VolumeChannel }
-  | { kind: 'calibration' };
+  | { kind: 'calibration' }
+  | { kind: 'stats' }
+  | { kind: 'exportRecords' }
+  | { kind: 'importRecords' };
 
 export const OFFSET_STEP_FINE_MS = 1;
 export const OFFSET_STEP_COARSE_MS = 10;
@@ -53,7 +56,14 @@ export type CaptureOutcome =
   | { kind: 'rejected-reserved'; code: string }
   | { kind: 'rejected-conflict'; code: string; conflictLane: number };
 
-export type ActivateOutcome = 'capture' | 'reset-all' | 'calibration' | 'none';
+export type ActivateOutcome =
+  | 'capture'
+  | 'reset-all'
+  | 'calibration'
+  | 'stats'
+  | 'export-records'
+  | 'import-records'
+  | 'none';
 
 export interface SettingsModelOptions {
   /** Live shared object — mutated in place, never replaced. */
@@ -77,6 +87,11 @@ export interface SettingsModel {
   conflictLane(): number | null;
   /** One-line status/rejection message for the screen, or null. */
   notice(): string | null;
+  /**
+   * Screen-owned outcomes (e.g. export/import results) surface through the same
+   * notice line; cleared like any other feedback on the next focus move.
+   */
+  setNotice(message: string | null): void;
   /** Enter on the focused row. */
   activate(): ActivateOutcome;
   /** A keydown while capturing. Escape cancels capture only (MUST 9/10). */
@@ -104,6 +119,12 @@ function buildRows(): SettingsRow[] {
     { kind: 'volume', channel: 'music' },
     { kind: 'volume', channel: 'effects' },
     { kind: 'calibration' },
+    // Records section (settings-screen.md SHOULD 13, results-records.md SHOULD 10/11):
+    // the stats view and the export/import entry points live here — the screen enum
+    // stays closed (app-shell-navigation.md MUST 1), same precedent as calibration.
+    { kind: 'stats' },
+    { kind: 'exportRecords' },
+    { kind: 'importRecords' },
   );
   return rows;
 }
@@ -153,6 +174,15 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
       case 'calibration':
         clearFeedback();
         return 'calibration';
+      case 'stats':
+        clearFeedback();
+        return 'stats';
+      case 'exportRecords':
+        clearFeedback();
+        return 'export-records';
+      case 'importRecords':
+        clearFeedback();
+        return 'import-records';
       default:
         // Offset/volume rows have no Enter action — they adjust with ←/→.
         return 'none';
@@ -258,6 +288,9 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
     capturingLane: () => capturing,
     conflictLane: () => conflict,
     notice: () => notice,
+    setNotice: (message) => {
+      notice = message;
+    },
     activate,
     captureKey,
     cancelCapture,

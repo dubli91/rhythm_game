@@ -287,3 +287,69 @@ describe('openRecordsStore', () => {
     expect(store.getRecord(SONG_ID, CHART_ID)?.clearLamp).toBe('CLEAR');
   });
 });
+
+describe('export/import (results-records.md SHOULD 10)', () => {
+  it('exportJson → importJson into a fresh store fully restores records (acceptance criterion)', () => {
+    const storage1 = createFakeStorage();
+    const store1 = openRecordsStore({ storage: storage1, confirmReset: () => true });
+    store1.recordPlay(basePlay({ lamp: 'HARD_CLEAR', exScore: 150, bp: 2 }), NOW_1);
+    const exported = store1.exportJson();
+
+    const storage2 = createFakeStorage(); // "reset browser"
+    const store2 = openRecordsStore({ storage: storage2, confirmReset: () => true });
+    const outcome = store2.importJson(exported);
+
+    expect(outcome).toEqual({ ok: true, added: 1, improved: 0, unchanged: 0 });
+    expect(store2.getRecord(SONG_ID, CHART_ID)).toEqual(store1.getRecord(SONG_ID, CHART_ID));
+    // And it persisted: a third store over the same storage still sees it.
+    const store3 = openRecordsStore({ storage: storage2, confirmReset: () => true });
+    expect(store3.getRecord(SONG_ID, CHART_ID)?.clearLamp).toBe('HARD_CLEAR');
+  });
+
+  it('re-importing the same file writes nothing (stored bytes stay identical)', () => {
+    const storage = createFakeStorage();
+    const store = openRecordsStore({ storage, confirmReset: () => true });
+    store.recordPlay(basePlay(), NOW_1);
+    const exported = store.exportJson();
+    store.importJson(exported);
+    const bytes = storage.getItem('records.v1');
+
+    const outcome = store.importJson(exported);
+
+    expect(outcome).toEqual({ ok: true, added: 0, improved: 0, unchanged: 1 });
+    expect(storage.getItem('records.v1')).toBe(bytes);
+  });
+
+  it('merges an import on top of existing local records without downgrading', () => {
+    const storage = createFakeStorage();
+    const store = openRecordsStore({ storage, confirmReset: () => true });
+    store.recordPlay(basePlay({ lamp: 'HARD_CLEAR', exScore: 200 }), NOW_1);
+
+    // A file from "another device": strictly worse results on the shared chart
+    // (same timestamp/playCount so ONLY the lamp/bests differ), plus one new song.
+    const other = createFakeStorage();
+    const otherStore = openRecordsStore({ storage: other, confirmReset: () => true });
+    otherStore.recordPlay(basePlay({ lamp: 'FAILED', exScore: 10, finishedSong: false }), NOW_1);
+    otherStore.recordPlay(basePlay({ songId: 'song-other', lamp: 'CLEAR', exScore: 90 }), NOW_2);
+
+    const outcome = store.importJson(otherStore.exportJson());
+
+    expect(outcome).toEqual({ ok: true, added: 1, improved: 0, unchanged: 1 });
+    expect(store.getRecord(SONG_ID, CHART_ID)?.clearLamp).toBe('HARD_CLEAR');
+    expect(store.getRecord(SONG_ID, CHART_ID)?.bestExScore).toBe(200);
+    expect(store.getRecord('song-other', CHART_ID)?.clearLamp).toBe('CLEAR');
+  });
+
+  it('rejects invalid import text without touching stored records', () => {
+    const storage = createFakeStorage();
+    const store = openRecordsStore({ storage, confirmReset: () => true });
+    store.recordPlay(basePlay(), NOW_1);
+    const bytes = storage.getItem('records.v1');
+
+    for (const bad of ['not json {', '{"version":9,"data":{"records":{}}}', '{"version":1}']) {
+      const outcome = store.importJson(bad);
+      expect(outcome.ok).toBe(false);
+    }
+    expect(storage.getItem('records.v1')).toBe(bytes);
+  });
+});

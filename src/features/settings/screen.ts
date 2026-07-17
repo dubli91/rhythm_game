@@ -23,6 +23,9 @@ import {
 } from '../../lib/audio/sfx';
 import type { SfxScheduler } from '../../lib/audio/sfx';
 import { type ClockSources, type SongClock, createSongClock } from '../../lib/clock/audioClock';
+import { CLEAR_LAMP_ORDER } from '../play/gauge';
+import type { PlayerStats } from '../records/stats';
+import type { RecordsImportOutcome } from '../records/store';
 import {
   CALIBRATION_TAP_TARGET,
   type CalibrationSession,
@@ -45,6 +48,18 @@ export interface SettingsAudio {
   getOutputLatencySec(): number | undefined;
 }
 
+/**
+ * Records access for the RECORDS section (settings-screen.md SHOULD 13): the
+ * stats view + export/import entry points live HERE, but all the logic is
+ * owned by the records feature (results-records.md SHOULD 10/11) — this screen
+ * only renders results and moves file bytes.
+ */
+export interface SettingsRecordsAccess {
+  stats(): PlayerStats;
+  exportJson(): string;
+  importJson(text: string): RecordsImportOutcome;
+}
+
 export interface SettingsScreenOptions {
   mount: HTMLElement;
   /** The live settings object shared with the shell/session starts. */
@@ -53,6 +68,9 @@ export interface SettingsScreenOptions {
   /** Live GainNode apply — volume changes are audible immediately (MUST 11). */
   applyVolumes(volumes: VolumeSettings): void;
   getAudio(): SettingsAudio | null;
+  records: SettingsRecordsAccess;
+  /** Fired after a successful import that changed records (shell refreshes select lamps). */
+  onRecordsImported?(): void;
   /**
    * Menu cue hook (audio-playback.md MUST 8). This screen only emits
    * move/confirm — the cancel cue on exit belongs to the shell's onExit
@@ -148,6 +166,7 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
     offset: el('span', 'settings-summary'),
     volume: el('span', 'settings-summary'),
     calibration: el('span', 'settings-summary'),
+    records: el('span', 'settings-summary'),
   };
 
   function sectionHeader(title: string, summary: HTMLSpanElement): void {
@@ -158,7 +177,22 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
   }
 
   function performActivate(): void {
-    if (model.activate() === 'calibration') openCalibration();
+    switch (model.activate()) {
+      case 'calibration':
+        openCalibration();
+        break;
+      case 'stats':
+        openStats();
+        break;
+      case 'export-records':
+        exportRecords();
+        break;
+      case 'import-records':
+        importPicker.click();
+        break;
+      default:
+        break;
+    }
   }
 
   function rowLabel(row: SettingsRow): string {
@@ -173,6 +207,12 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
         return VOLUME_LABELS[row.channel];
       case 'calibration':
         return 'CALIBRATION';
+      case 'stats':
+        return 'STATISTICS';
+      case 'exportRecords':
+        return 'EXPORT RECORDS';
+      case 'importRecords':
+        return 'IMPORT RECORDS';
     }
   }
 
@@ -182,6 +222,7 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
     if (row.kind === 'volume' && row.channel === 'master')
       sectionHeader('VOLUME', summaries.volume);
     if (row.kind === 'calibration') sectionHeader('OFFSET CALIBRATION', summaries.calibration);
+    if (row.kind === 'stats') sectionHeader('RECORDS', summaries.records);
 
     const li = el('li', 'settings-row');
     li.dataset.row =
@@ -237,14 +278,34 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
       view.slider = slider;
     } else if (row.kind === 'calibration') {
       value.textContent = 'tap along with a steady click to measure your offset';
-      li.appendChild(smallButton('START', () => performActivate()));
+      li.appendChild(smallButton('START', () => activateThisRow()));
+    } else if (row.kind === 'stats') {
+      value.textContent = 'total plays, lamp distribution, clears by level';
+      li.appendChild(smallButton('VIEW', () => activateThisRow()));
+    } else if (row.kind === 'exportRecords') {
+      value.textContent = 'download all play records as a JSON file';
+      li.appendChild(smallButton('DOWNLOAD JSON', () => activateThisRow()));
+    } else if (row.kind === 'importRecords') {
+      value.textContent = 'merge records from an exported JSON file';
+      li.appendChild(smallButton('CHOOSE FILE…', () => activateThisRow()));
+    }
+
+    // Buttons stopPropagation, so the li's focusing click handler never runs for
+    // them — focus explicitly first or performActivate() would act on whichever
+    // row happened to hold the cursor.
+    function activateThisRow(): void {
+      model.setFocus(index);
+      performActivate();
     }
 
     li.addEventListener('click', (event) => {
       // Sliders keep their own click/drag behavior; row click just focuses.
+      // Export/import act only through their buttons/Enter — a stray row click
+      // must not fire a download or a file-picker popup.
       const isSlider = event.target instanceof HTMLInputElement;
       model.setFocus(index);
-      if (!isSlider && (row.kind === 'lane' || row.kind === 'calibration')) performActivate();
+      if (!isSlider && (row.kind === 'lane' || row.kind === 'calibration' || row.kind === 'stats'))
+        performActivate();
       render();
     });
 
@@ -401,6 +462,99 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
     }
   }
 
+  // --- stats modal (results-records.md SHOULD 11; in-settings modal like calibration) ---
+  const statsModal = el('div', 'settings-modal');
+  statsModal.dataset.modal = 'stats';
+  const statsCard = el('div', 'settings-modal-card settings-stats-card');
+  statsCard.appendChild(el('div', 'settings-modal-title', 'PLAYER STATISTICS'));
+  const statsBody = el('div', 'settings-modal-body');
+  statsCard.append(statsBody, el('div', 'hint', 'ESC close'));
+  statsModal.appendChild(statsCard);
+  mount.appendChild(statsModal);
+  let statsOpen = false;
+
+  function openStats(): void {
+    statsBody.textContent = '';
+    const stats = opts.records.stats();
+    statsBody.appendChild(el('div', 'settings-cal-count', `${stats.totalPlays} PLAYS`));
+    statsBody.appendChild(
+      el('div', undefined, `${stats.playedCharts} / ${stats.totalCharts} charts played`),
+    );
+    const lamps = el('div', 'settings-stats-lamps');
+    // Best lamp first — the order players scan a lamp distribution in.
+    for (const lamp of [...CLEAR_LAMP_ORDER].reverse()) {
+      const row = el('div', 'settings-stats-row');
+      row.appendChild(el('span', `lamp lamp-${lamp}`, lamp.replace(/_/g, ' ')));
+      row.appendChild(el('span', undefined, String(stats.lampCounts[lamp])));
+      lamps.appendChild(row);
+    }
+    statsBody.appendChild(lamps);
+    const levels = el('div', 'settings-stats-levels');
+    for (const row of stats.clearByLevel) {
+      const line = el('div', 'settings-stats-row');
+      line.appendChild(el('span', undefined, `☆${row.level}`));
+      line.appendChild(el('span', undefined, `${row.cleared} / ${row.total} cleared`));
+      levels.appendChild(line);
+    }
+    statsBody.appendChild(levels);
+    statsOpen = true;
+    statsModal.classList.add('visible');
+  }
+
+  function closeStats(): void {
+    statsOpen = false;
+    statsModal.classList.remove('visible');
+  }
+
+  // --- records export/import (results-records.md SHOULD 10; logic in the records feature) ---
+  function exportRecords(): void {
+    const json = opts.records.exportJson();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    const stamp = new Date().toISOString().slice(0, 10);
+    anchor.download = `iidx-web-records-${stamp}.json`;
+    anchor.click();
+    // Deferred: revoking synchronously can cancel the download the click just started.
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    model.setNotice(`records exported to ${anchor.download}`);
+    render();
+  }
+
+  const importPicker = el('input');
+  importPicker.type = 'file';
+  importPicker.accept = 'application/json,.json';
+  importPicker.style.display = 'none';
+  importPicker.dataset.role = 'import-records';
+  importPicker.addEventListener('change', () => {
+    const file = importPicker.files?.[0];
+    // Reset so picking the same file again re-fires 'change' (retry after a fix).
+    importPicker.value = '';
+    if (file === undefined) return;
+    void file.text().then(
+      (text) => {
+        const outcome = opts.records.importJson(text);
+        if (outcome.ok) {
+          model.setNotice(
+            `import complete: ${outcome.added} added · ${outcome.improved} improved · ${outcome.unchanged} unchanged`,
+          );
+          if (outcome.added > 0 || outcome.improved > 0) opts.onRecordsImported?.();
+        } else {
+          model.setNotice(`import failed: ${outcome.error}`);
+        }
+        render();
+      },
+      (err: unknown) => {
+        model.setNotice(
+          `import failed: could not read file (${err instanceof Error ? err.message : String(err)})`,
+        );
+        render();
+      },
+    );
+  });
+  mount.appendChild(importPicker);
+
   // --- render (updates only; never rebuilds nodes) ------------------------------
   function render(): void {
     statusEl.textContent = model.notice() ?? '';
@@ -440,10 +594,19 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
     summaries.offset.textContent = formatOffsetMs(values.globalOffsetMs);
     summaries.volume.textContent = `MASTER ${percent(values.volumes.master)} · MUSIC ${percent(values.volumes.music)} · FX ${percent(values.volumes.effects)}`;
     summaries.calibration.textContent = `${CALIBRATION_TAP_TARGET} taps`;
+    const stats = opts.records.stats();
+    summaries.records.textContent = `${stats.totalPlays} plays · ${stats.playedCharts}/${stats.totalCharts} charts`;
   }
 
   // --- keyboard (attached while the screen is active) ---------------------------
   function handleKeyDown(event: KeyboardEvent): void {
+    if (statsOpen) {
+      // Read-only modal: eat everything so screen navigation can't move under
+      // it; Escape (or Enter) closes.
+      event.preventDefault();
+      if (event.code === 'Escape' || event.code === 'Enter') closeStats();
+      return;
+    }
     if (calRun !== null) {
       handleCalibrationKey(event);
       return;
@@ -523,6 +686,7 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
       active = false;
       document.removeEventListener('keydown', handleKeyDown);
       if (calRun !== null) closeCalibration(false);
+      if (statsOpen) closeStats();
       model.cancelCapture();
       render();
     },

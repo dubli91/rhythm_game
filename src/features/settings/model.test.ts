@@ -25,18 +25,22 @@ function makeModel(values: SettingsValues = makeValues()) {
 }
 
 // Row indices (fixed layout): 0..7 lanes, 8 resetAll, 9 offset,
-// 10..12 volumes (master/music/effects), 13 calibration.
+// 10..12 volumes (master/music/effects), 13 calibration,
+// 14 stats, 15 exportRecords, 16 importRecords (records section, SHOULD 13).
 const ROW_RESET_ALL = 8;
 const ROW_OFFSET = 9;
 const ROW_VOLUME_MASTER = 10;
 const ROW_VOLUME_EFFECTS = 12;
 const ROW_CALIBRATION = 13;
+const ROW_STATS = 14;
+const ROW_EXPORT = 15;
+const ROW_IMPORT = 16;
 
 describe('row layout', () => {
   it('lists scratch then keys 1-7 first (settings-screen.md MUST 5 order), then the value rows', () => {
     const { model } = makeModel();
     const rows = model.rows();
-    expect(rows).toHaveLength(14);
+    expect(rows).toHaveLength(17);
     for (let lane = 0; lane < 8; lane++) {
       expect(rows[lane]).toEqual({ kind: 'lane', lane });
     }
@@ -46,6 +50,9 @@ describe('row layout', () => {
     expect(rows[11]).toEqual({ kind: 'volume', channel: 'music' });
     expect(rows[ROW_VOLUME_EFFECTS]).toEqual({ kind: 'volume', channel: 'effects' });
     expect(rows[ROW_CALIBRATION]).toEqual({ kind: 'calibration' });
+    expect(rows[ROW_STATS]).toEqual({ kind: 'stats' });
+    expect(rows[ROW_EXPORT]).toEqual({ kind: 'exportRecords' });
+    expect(rows[ROW_IMPORT]).toEqual({ kind: 'importRecords' });
   });
 
   it('laneName maps scratch and keys', () => {
@@ -61,9 +68,9 @@ describe('focus movement', () => {
     model.moveFocus(-1);
     expect(model.focusIndex()).toBe(0);
     model.moveFocus(99);
-    expect(model.focusIndex()).toBe(ROW_CALIBRATION);
+    expect(model.focusIndex()).toBe(ROW_IMPORT);
     model.moveFocus(1);
-    expect(model.focusIndex()).toBe(ROW_CALIBRATION);
+    expect(model.focusIndex()).toBe(ROW_IMPORT);
   });
 
   it('is ignored while capturing (screen routes keys to capture first anyway)', () => {
@@ -280,5 +287,31 @@ describe('activate outcomes', () => {
     expect(model.activate()).toBe('none');
     model.setFocus(ROW_VOLUME_EFFECTS);
     expect(model.activate()).toBe('none');
+  });
+
+  it('returns the records-section outcomes on the stats/export/import rows', () => {
+    const { model } = makeModel();
+    model.setFocus(ROW_STATS);
+    expect(model.activate()).toBe('stats');
+    model.setFocus(ROW_EXPORT);
+    expect(model.activate()).toBe('export-records');
+    model.setFocus(ROW_IMPORT);
+    expect(model.activate()).toBe('import-records');
+  });
+
+  it('records rows are not ←/→-adjustable', () => {
+    const { model } = makeModel();
+    model.setFocus(ROW_EXPORT);
+    expect(model.adjustFocused(1, false)).toBe(false);
+  });
+});
+
+describe('setNotice', () => {
+  it('surfaces a screen-owned message and clears on the next focus move', () => {
+    const { model } = makeModel();
+    model.setNotice('records exported to file.json');
+    expect(model.notice()).toBe('records exported to file.json');
+    model.moveFocus(1);
+    expect(model.notice()).toBeNull();
   });
 });

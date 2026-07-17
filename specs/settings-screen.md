@@ -13,7 +13,7 @@
 
 ### 화면 구성 — MUST
 
-1. 하나의 화면에 네 섹션을 둔다: 키 컨피그, 판정 오프셋, 볼륨, 오프셋 보정 진입. 각 헤더에 현재 값을 요약 표시한다 (예: 오프셋 "+12ms", 볼륨 "마스터 80%").
+1. 하나의 화면에 필수 네 섹션을 둔다: 키 컨피그, 판정 오프셋, 볼륨, 오프셋 보정 진입 (SHOULD 13의 기록 섹션이 SHOULD 티어로 추가될 수 있다). 각 헤더에 현재 값을 요약 표시한다 (예: 오프셋 "+12ms", 볼륨 "마스터 80%").
 2. 판정 오프셋 섹션: −200 ~ +200ms 범위의 스텝퍼/슬라이더 하나([audio-playback](audio-playback.md) MUST 7). ms 단위 정수로 표시한다.
 3. 볼륨 섹션: 마스터/음악/효과 3개 슬라이더(0~100%)([audio-playback](audio-playback.md) MUST 9). 효과 슬라이더 조정 시 확인용 효과음을 재생한다.
 4. 오프셋 보정 진입: 버튼 하나로 보정 화면(SHOULD 12)에 진입한다. 보정 알고리즘 자체는 이 스펙에서 정의하지 않는다.
@@ -37,7 +37,7 @@
 ### SHOULD
 
 12. 오프셋 보정 화면: 일정 BPM 클릭에 맞춰 약 16회 입력을 받아 평균 오차를 계산하고, 제안 오프셋을 적용/취소 선택지로 제시한다 (계산·적용 로직은 [audio-playback](audio-playback.md) SHOULD 10을 따른다).
-13. 기록 JSON 내보내기/가져오기 진입점을 설정 화면에 둔다([results-records](results-records.md) SHOULD 10). 로직 자체는 이 스펙에서 정의하지 않는다.
+13. 기록 섹션: 통계와 내보내기/가져오기를 모으는 다섯 번째 섹션을 둔다(SHOULD 티어). 플레이어 통계(총 플레이 수·램프 분포·레벨별 클리어 현황, [results-records](results-records.md) SHOULD 11)는 오프셋 보정 진입처럼 별도 화면 상태(app-shell-navigation 화면 열거형)를 만들지 않으며, 설정 화면 내 모달로 연다. 기록 JSON 내보내기/가져오기 진입점([results-records](results-records.md) SHOULD 10)도 이 섹션에 둔다. 통계·내보내기/가져오기 로직 자체는 이 스펙에서 정의하지 않는다.
 14. localStorage 키 이름을 표준화한다: 설정은 `settings.v1` 형식의 단일 버전 문서 하나로 저장한다 (키 매핑·오프셋·볼륨 포함).
 
 ## 수용 기준
@@ -54,7 +54,7 @@
 
 - 진입: [song-select](song-select.md) (MUST 10, 설정 목적지)
 - 위임: [input-handling](input-handling.md) (키 재할당 로직·저장, MUST 7-9), [audio-playback](audio-playback.md) (오프셋·볼륨 값·보정 로직, MUST 7, 9 / SHOULD 10-11)
-- 진입점 제공: [results-records](results-records.md) (SHOULD 10, 내보내기/가져오기)
+- 진입점 제공: [results-records](results-records.md) (SHOULD 10 내보내기/가져오기, SHOULD 11 통계 — 기록 섹션)
 - 참조: [play-options](play-options.md) (플레이 중 조작 키와의 충돌 회피, MUST 3, 6)
 
 ## 미해결 질문
