@@ -55,6 +55,40 @@ await step('unlock -> song select (grouped list, >=3 built-in songs)', async () 
   await page.screenshot({ path: SHOT('2-select') });
 });
 
+// Song preview (song-select.md SHOULD 12): the shell mirrors the preview
+// player's state onto data attributes of the select screen root.
+const previewAttrs = () =>
+  page.$eval('[data-screen="SONG_SELECT"]', (n) => ({
+    state: n.dataset.previewState ?? '',
+    song: n.dataset.previewSong ?? '',
+  }));
+const waitForPreview = (state, song) =>
+  page.waitForFunction(
+    ([s, id]) => {
+      const n = document.querySelector('[data-screen="SONG_SELECT"]');
+      return n?.dataset.previewState === s && (id === null || n?.dataset.previewSong === id);
+    },
+    [state, song],
+    { timeout: 8000 },
+  );
+
+await step('song preview: plays on cursor settle, follows the song, stops off-screen', async () => {
+  // Cursor starts on the first song row (First Light under TITLE sort).
+  await waitForPreview('playing', 'song-6f90aea6');
+  console.log(`  preview after settle: ${JSON.stringify(await previewAttrs())}`);
+  await page.keyboard.press('ArrowDown'); // next song row: Neon Cascade
+  await waitForPreview('playing', 'song-720e0160');
+  console.log(`  preview after move: ${JSON.stringify(await previewAttrs())}`);
+  await page.keyboard.press('KeyO'); // settings entry must silence the preview
+  await page.waitForSelector('[data-screen="SETTINGS"].active', { timeout: 5000 });
+  const inSettings = await previewAttrs();
+  if (inSettings.state !== 'idle')
+    throw new Error(`preview should stop outside select, got ${JSON.stringify(inSettings)}`);
+  await page.keyboard.press('Escape'); // back to select -> resumes from the decode cache
+  await waitForPreview('playing', 'song-720e0160');
+  console.log('  preview resumed after settings round-trip');
+});
+
 await step('expand First Light -> chart rows appear, first chart selected', async () => {
   await navigateToSong('First Light');
   await page.keyboard.press('Enter');

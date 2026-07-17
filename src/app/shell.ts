@@ -32,6 +32,12 @@ import {
   createSelectModel,
   isSortMode,
 } from '../features/select/model';
+import {
+  type PreviewAudioContextLike,
+  type PreviewPlayer,
+  type PreviewTarget,
+  createPreviewPlayer,
+} from '../features/select/preview';
 import type { SettingsValues } from '../features/settings/model';
 import { type SettingsScreen, createSettingsScreen } from '../features/settings/screen';
 import { type SongLibrary, loadLibrary, loadPlayableSong } from '../features/songs/library';
@@ -440,6 +446,50 @@ export function bootShell(root: HTMLElement): void {
   };
   let selectModel: SelectModel | null = null;
 
+  // --- song preview (song-select.md SHOULD 12 / audio-playback.md SHOULD 12) ---
+  // Created lazily after the audio unlock; follows the select cursor's song and
+  // is silenced whenever the current screen is not SONG_SELECT. State mirrors
+  // into data attributes so e2e (and CSS, later) can observe it.
+  let previewPlayer: PreviewPlayer | null = null;
+  function ensurePreviewPlayer(): PreviewPlayer | null {
+    if (previewPlayer === null && audioCtx !== null && gameAudio !== null) {
+      previewPlayer = createPreviewPlayer({
+        ctx: audioCtx as unknown as PreviewAudioContextLike,
+        musicBus: gameAudio.musicBus,
+        onStateChange: (state) => {
+          selectEl.dataset.previewState = state.phase;
+          selectEl.dataset.previewSong = state.songId ?? '';
+        },
+      });
+    }
+    return previewPlayer;
+  }
+  function selectedPreviewTarget(): PreviewTarget | null {
+    if (selectModel === null) return null;
+    const row = selectModel.rows().find((r) => r.selected);
+    // Chart rows inherit their song's preview; entries without preview metadata
+    // (no catalogEntry, e.g. imported songs) simply stay silent.
+    const catalogEntry = row?.entry.catalogEntry;
+    if (catalogEntry?.preview === undefined) return null;
+    return {
+      songId: catalogEntry.songId,
+      audioUrl: catalogEntry.audio,
+      startMs: catalogEntry.preview.startMs,
+      durationMs: catalogEntry.preview.durationMs,
+    };
+  }
+  /** Converge the preview onto the current screen + cursor; safe to call from anywhere. */
+  function updatePreview(): void {
+    ensurePreviewPlayer()?.request(
+      machine.current() === 'SONG_SELECT' ? selectedPreviewTarget() : null,
+    );
+  }
+  // Any screen change re-evaluates the preview: leaving SONG_SELECT fades it
+  // out (no residual audio, audio-playback.md acceptance), returning resumes it.
+  machine.onChange(() => {
+    updatePreview();
+  });
+
   const LAMP_LABELS: Record<ClearLamp, string> = {
     NO_PLAY: 'NO PLAY',
     FAILED: 'FAILED',
@@ -514,6 +564,9 @@ export function bootShell(root: HTMLElement): void {
       listEl.appendChild(li);
     });
     listEl.querySelector('li.selected')?.scrollIntoView({ block: 'nearest' });
+    // Every selection-changing path re-renders the list, so this single hook
+    // keeps the preview following the cursor.
+    updatePreview();
   }
 
   function saveSelectDoc(): void {
