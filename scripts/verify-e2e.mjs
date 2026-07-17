@@ -212,18 +212,22 @@ await step('sort modes cycle (S) and persist to select.v1', async () => {
 await step('search (/): filters live, owns the keyboard while focused (SHOULD 11)', async () => {
   await page.keyboard.press('Slash');
   const focused = await page.evaluate(() => document.activeElement?.dataset?.role ?? '');
-  if (focused !== 'select-search') throw new Error(`Slash should focus the search box, got "${focused}"`);
+  if (focused !== 'select-search')
+    throw new Error(`Slash should focus the search box, got "${focused}"`);
   await page.keyboard.type('neon');
   const titles = await page.$$eval('.song-list li.song-row', (ls) => ls.map((l) => l.textContent));
   if (titles.length !== 1 || !titles[0].includes('Neon Cascade'))
-    throw new Error(`filter "neon" should leave exactly Neon Cascade, got ${JSON.stringify(titles)}`);
+    throw new Error(
+      `filter "neon" should leave exactly Neon Cascade, got ${JSON.stringify(titles)}`,
+    );
   let line = await page.$eval('.sort-line', (n) => n.textContent);
   if (!line.includes('1 SONG')) throw new Error(`match count missing from readout: ${line}`);
   // While typing, menu bindings must NOT fire: this 's' extends the filter (zero matches)
   // instead of cycling the sort (app-shell-navigation.md MUST 17).
   await page.keyboard.type('s');
   const rowCount = await page.$$eval('.song-list li', (ls) => ls.length);
-  if (rowCount !== 0) throw new Error(`zero-match filter should empty the list, got ${rowCount} rows`);
+  if (rowCount !== 0)
+    throw new Error(`zero-match filter should empty the list, got ${rowCount} rows`);
   line = await page.$eval('.sort-line', (n) => n.textContent);
   if (!line.includes('SORT TITLE')) throw new Error(`typing "s" must not cycle sort: ${line}`);
   await page.keyboard.press('Backspace'); // back to "neon" -> 1 song
@@ -242,48 +246,63 @@ await step('search (/): filters live, owns the keyboard while focused (SHOULD 11
   await page.keyboard.press('Delete');
   await page.keyboard.press('Escape');
   const songCount = await page.$$eval('.song-list li.song-row', (ls) => ls.length);
-  if (songCount !== 3) throw new Error(`clearing the filter should restore 3 songs, got ${songCount}`);
+  if (songCount !== 3)
+    throw new Error(`clearing the filter should restore 3 songs, got ${songCount}`);
 });
 
-await step('level folder view (F): charts group by level, persists to select.v1 (SHOULD 13)', async () => {
-  await page.keyboard.press('KeyF');
-  const line = await page.$eval('.sort-line', (n) => n.textContent);
-  if (!line.includes('LEVEL FOLDERS')) throw new Error(`readout should show LEVEL FOLDERS: ${line}`);
-  // Catalog levels: FL N4/H7, NC N6/H8, OC H9/A11 -> folders 4,6,7,8,9,11 with 1 chart each.
-  const folders = await page.$$eval('.song-list li.folder-row .folder-title', (ls) =>
-    ls.map((l) => l.textContent),
-  );
-  console.log(`  folders: ${JSON.stringify(folders)}`);
-  const levels = folders.map((f) => f.replace('LEVEL ', ''));
-  if (levels.join(',') !== '4,6,7,8,9,11')
-    throw new Error(`expected folders 4,6,7,8,9,11 ascending, got ${levels.join(',')}`);
-  const persisted = await page.evaluate(() => localStorage.getItem('select.v1'));
-  if (!persisted || !persisted.includes('"viewMode":"level"'))
-    throw new Error(`viewMode not persisted: ${persisted}`);
-  await page.keyboard.press('Enter'); // expand LEVEL 4 -> its one chart, selected
-  const selected = await page.$eval('.song-list li.selected', (n) => ({
-    text: n.textContent,
-    isChart: n.classList.contains('chart-row'),
-  }));
-  console.log(`  selected in folder: ${JSON.stringify(selected)}`);
-  if (!selected.isChart || !selected.text.includes('First Light') || !selected.text.includes('NORMAL'))
-    throw new Error('LEVEL 4 folder should open onto First Light NORMAL with the song named on the row');
-  await page.screenshot({ path: SHOT('8c-folders') });
-  await page.keyboard.press('Escape'); // collapse the folder
-  const chartRows = await page.$$eval('.song-list li.chart-row', (ls) => ls.length);
-  if (chartRows !== 0) throw new Error('Escape should collapse the folder');
-  await page.keyboard.press('KeyF'); // back to song view for the steps that follow
-  const doc = await page.evaluate(() => localStorage.getItem('select.v1'));
-  if (!doc || !doc.includes('"viewMode":"song"'))
-    throw new Error(`toggling back should persist song view: ${doc}`);
-});
+await step(
+  'level folder view (F): charts group by level, persists to select.v1 (SHOULD 13)',
+  async () => {
+    await page.keyboard.press('KeyF');
+    const line = await page.$eval('.sort-line', (n) => n.textContent);
+    if (!line.includes('LEVEL FOLDERS'))
+      throw new Error(`readout should show LEVEL FOLDERS: ${line}`);
+    // Catalog levels: FL N4/H7, NC N6/H8, OC H9/A11 -> folders 4,6,7,8,9,11 with 1 chart each.
+    const folders = await page.$$eval('.song-list li.folder-row .folder-title', (ls) =>
+      ls.map((l) => l.textContent),
+    );
+    console.log(`  folders: ${JSON.stringify(folders)}`);
+    const levels = folders.map((f) => f.replace('LEVEL ', ''));
+    if (levels.join(',') !== '4,6,7,8,9,11')
+      throw new Error(`expected folders 4,6,7,8,9,11 ascending, got ${levels.join(',')}`);
+    const persisted = await page.evaluate(() => localStorage.getItem('select.v1'));
+    if (!persisted || !persisted.includes('"viewMode":"level"'))
+      throw new Error(`viewMode not persisted: ${persisted}`);
+    await page.keyboard.press('Enter'); // expand LEVEL 4 -> its one chart, selected
+    const selected = await page.$eval('.song-list li.selected', (n) => ({
+      text: n.textContent,
+      isChart: n.classList.contains('chart-row'),
+    }));
+    console.log(`  selected in folder: ${JSON.stringify(selected)}`);
+    if (
+      !selected.isChart ||
+      !selected.text.includes('First Light') ||
+      !selected.text.includes('NORMAL')
+    )
+      throw new Error(
+        'LEVEL 4 folder should open onto First Light NORMAL with the song named on the row',
+      );
+    await page.screenshot({ path: SHOT('8c-folders') });
+    await page.keyboard.press('Escape'); // collapse the folder
+    const chartRows = await page.$$eval('.song-list li.chart-row', (ls) => ls.length);
+    if (chartRows !== 0) throw new Error('Escape should collapse the folder');
+    await page.keyboard.press('KeyF'); // back to song view for the steps that follow
+    const doc = await page.evaluate(() => localStorage.getItem('select.v1'));
+    if (!doc || !doc.includes('"viewMode":"song"'))
+      throw new Error(`toggling back should persist song view: ${doc}`);
+  },
+);
 
-await step('hi-speed adjust from options panel persists', async () => {
+await step('hi-speed adjust from options panel persists (+ GREEN readout)', async () => {
+  await navigateToSong('First Light'); // 150 BPM constant — deterministic GREEN
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   const bar = await page.$eval('.options-bar', (n) => n.textContent);
   console.log(`  options bar: ${bar}`);
   if (!bar.includes('1.50')) throw new Error('hi-speed should read 1.50 after two +0.25 steps');
+  // Green number (play-options.md SHOULD 13): 600px / (130 × 1.5 × 150/60000) = 1231ms.
+  if (!bar.includes('GREEN 1231'))
+    throw new Error('GREEN should read 1231 at BPM 150 / HS 1.50 / no cover');
   const doc = await page.evaluate(() => localStorage.getItem('playOptions.v1'));
   if (!doc || !doc.includes('1.5')) throw new Error('hi-speed not persisted');
 });
@@ -299,10 +318,24 @@ await step('arrangement + SUDDEN+ from options panel persist', async () => {
   console.log(`  options bar: ${bar}`);
   if (!bar.includes('SUDDEN+ 32%'))
     throw new Error('sudden+ should read 32% after Home + 2x PageUp');
+  // Cover shrinks the visible run: 600×0.68px / (130 × 1.5 × 150/60000) = 837ms.
+  if (!bar.includes('GREEN 837'))
+    throw new Error('GREEN should account for the 32% cover (expected 837)');
   const doc = await page.evaluate(() => localStorage.getItem('playOptions.v1'));
   console.log(`  playOptions.v1: ${doc}`);
   if (!doc || !doc.includes('"arrangement":"RANDOM"')) throw new Error('arrangement not persisted');
   if (!doc.includes('"suddenPlusCover":32')) throw new Error('cover not persisted');
+});
+
+await step('GREEN uses the max BPM of a soflan song on select', async () => {
+  // Neon Cascade is 140-175: the readout must use 175 (play-options.md SHOULD 13
+  // implementation decision), i.e. 408px visible / (130 × 1.5 × 175/60000) = 717ms —
+  // the min-BPM figure would be 897.
+  await navigateToSong('Neon Cascade');
+  const bar = await page.$eval('.options-bar', (n) => n.textContent);
+  console.log(`  options bar: ${bar}`);
+  if (!bar.includes('GREEN 717'))
+    throw new Error('GREEN should derive from the song MAX BPM (expected 717)');
 });
 
 await step('in-play option keys adjust hi-speed/cover; results + persistence', async () => {

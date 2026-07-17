@@ -37,3 +37,33 @@ export function nextArrangement(current: Arrangement): Arrangement {
   const index = ARRANGEMENTS.indexOf(current);
   return ARRANGEMENTS[(index + 1) % ARRANGEMENTS.length] ?? 'OFF';
 }
+
+/** Scroll geometry owned by the renderer (RENDER_LAYOUT); injected so this
+ *  module stays headless. render.ts exports `greenNumberFor` bound to it. */
+export interface ScrollGeometry {
+  /** px from the playfield top edge to the judgement line. */
+  scrollHeightPx: number;
+  pixelsPerBeat: number;
+}
+
+// Green number (play-options.md SHOULD 13): how long a note stays visible, in
+// ms, under the current hi-speed and SUDDEN+ cover. Notes travel
+// pixelsPerBeat × hiSpeed px per beat at bpm beats/min, and the visible run is
+// the scroll area minus whatever the cover hides:
+//   green = scrollPx × (1 − cover/100) / (pixelsPerBeat × hiSpeed × bpm / 60000)
+// Reference BPM (pinned in the spec): song select uses the song's MAX BPM —
+// the catalog only carries a song-level min/max before the chart JSON
+// lazy-loads, and max keeps the fastest section of a soflan chart readable.
+// In play the HUD readout follows the CURRENT BPM instead, because scroll
+// speed is BPM-proportional (MUST 2) and the true visible time moves with it.
+export function greenNumberMs(
+  bpm: number,
+  hiSpeed: number,
+  coverPercent: number,
+  geometry: ScrollGeometry,
+): number {
+  if (bpm <= 0 || hiSpeed <= 0) return 0;
+  const visiblePx = geometry.scrollHeightPx * (1 - clampCover(coverPercent) / 100);
+  const pxPerMs = (geometry.pixelsPerBeat * hiSpeed * bpm) / 60000;
+  return Math.round(visiblePx / pxPerMs);
+}

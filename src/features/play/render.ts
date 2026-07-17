@@ -12,6 +12,7 @@
 
 import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import type { Chart, Note } from '../../lib/chart/types';
+import { type ScrollGeometry, greenNumberMs } from './options';
 import type { GaugeType, JudgementGrade, JudgementKind } from './types';
 
 export interface PlayRenderInit {
@@ -120,6 +121,7 @@ export const RENDER_LAYOUT = {
   EX_SCORE_Y: 80,
   BPM_Y: 130,
   HISPEED_Y: 160,
+  GREEN_Y: 190,
 
   // Practice stats block (right of the playfield, clear of the HUD panel).
   INFO_X: 660,
@@ -127,6 +129,19 @@ export const RENDER_LAYOUT = {
 
   INITIAL_NOTE_POOL: 64,
 } as const;
+
+// Hoisted so the per-frame green-number call allocates nothing (see the
+// zero-allocation contract at the top of this file).
+const SCROLL_GEOMETRY: ScrollGeometry = {
+  scrollHeightPx: RENDER_LAYOUT.JUDGEMENT_LINE_Y - RENDER_LAYOUT.LANE_TOP_Y,
+  pixelsPerBeat: RENDER_LAYOUT.PIXELS_PER_BEAT,
+};
+
+/** Green number bound to this renderer's geometry (play-options.md SHOULD 13).
+ *  The formula lives in options.ts; only the px constants come from here. */
+export function greenNumberFor(bpm: number, hiSpeed: number, coverPercent: number): number {
+  return greenNumberMs(bpm, hiSpeed, coverPercent, SCROLL_GEOMETRY);
+}
 
 // Lane background colors: near-black alternating, scratch slightly red-tinted.
 const LANE_BG_SCRATCH = 0x160d12;
@@ -355,6 +370,14 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   hiSpeedText.y = L.HISPEED_Y;
   hudContainer.addChild(hiSpeedText);
 
+  const greenText = new Text({
+    text: 'GREEN  0',
+    style: { fill: 0x7ee787, fontFamily: 'Arial', fontSize: 18 },
+  });
+  greenText.x = L.PANEL_X;
+  greenText.y = L.GREEN_Y;
+  hudContainer.addChild(greenText);
+
   // Gauge widgets exist only on the song HUD; practice has no gauge
   // (practice-mode.md MUST 7) and shows a stats block instead.
   let gaugePctText: Text | null = null;
@@ -472,6 +495,7 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   let lastExScore = -1;
   let lastBpmShown = Number.NaN;
   let lastHiSpeedShown = Number.NaN;
+  let lastGreenShown = Number.NaN;
   let lastGaugePctShown = Number.NaN;
   let lastComboShown = -1;
   let lastGradeShown = '';
@@ -682,6 +706,18 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     if (hiShown !== lastHiSpeedShown) {
       hiSpeedText.text = `Hi-Speed  ${hiShown.toFixed(2)}`;
       lastHiSpeedShown = hiShown;
+    }
+    // Green number (play-options.md SHOULD 13): follows the CURRENT BPM — the
+    // true visible time moves through soflan since scroll is BPM-proportional
+    // (MUST 2). The select screen shows the max-BPM figure instead.
+    const greenShown = greenNumberFor(
+      view.currentBpm,
+      view.hiSpeed,
+      view.suddenPlusEnabled ? view.suddenPlusCover : 0,
+    );
+    if (greenShown !== lastGreenShown) {
+      greenText.text = `GREEN  ${greenShown}`;
+      lastGreenShown = greenShown;
     }
 
     // SUDDEN+ cover (spec MUST 11). Height is a % of the scroll area above the

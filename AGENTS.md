@@ -41,3 +41,5 @@ Run these after implementing to get immediate feedback:
 - `AudioContext.currentTime` is the only game clock; never use rAF timestamps for song time.
 - Play-domain contracts live in src/features/play/types.ts (JudgementEvent, GaugeType); engines (judgement/scoring/gauge) are pure and headless-tested; render.ts is read-only (never computes time); controller.ts owns the rAF loop and all state.
 - Screen transitions must go through createScreenMachine (src/app/screens.ts) — it throws on transitions not in specs/app-shell-navigation.md.
+- pixi.js is import-safe in vitest's node env — tests CAN import render.ts for constants/pure
+  helpers (options.test.ts imports RENDER_LAYOUT / greenNumberFor); only Application init needs a DOM.

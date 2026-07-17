@@ -17,6 +17,7 @@ import {
   nextArrangement,
   stepCover,
 } from '../features/play/options';
+import { greenNumberFor } from '../features/play/render';
 import { type SongAudioContextLike, createSongPlayer } from '../features/play/songPlayer';
 import { type Arrangement, GAUGE_TYPES, type GaugeType } from '../features/play/types';
 import { startPracticeSession } from '../features/practice/controller';
@@ -464,10 +465,11 @@ export function bootShell(root: HTMLElement): void {
   const optionsBar = el('div', 'options-bar');
   const gaugeOpt = el('span');
   const hiSpeedOpt = el('span');
+  const greenOpt = el('span');
   const arrangeOpt = el('span');
   const suddenOpt = el('span');
   const autoplayOpt = el('span');
-  optionsBar.append(gaugeOpt, hiSpeedOpt, arrangeOpt, suddenOpt, autoplayOpt);
+  optionsBar.append(gaugeOpt, hiSpeedOpt, greenOpt, arrangeOpt, suddenOpt, autoplayOpt);
   selectEl.appendChild(optionsBar);
   selectEl.appendChild(
     el(
@@ -550,6 +552,20 @@ export function bootShell(root: HTMLElement): void {
   function renderOptionsBar(): void {
     gaugeOpt.innerHTML = `GAUGE <b>${playOptions.gaugeType.replace('_', ' ')}</b>`;
     hiSpeedOpt.innerHTML = `HI-SPEED <b>${playOptions.hiSpeed.toFixed(2)}</b>`;
+    // Green number (play-options.md SHOULD 13). Reference BPM here is the
+    // selected song's MAX BPM: the catalog only has a song-level range before
+    // the chart JSON lazy-loads, and max keeps a soflan chart's fastest
+    // section readable. The in-play HUD readout follows the live BPM instead.
+    const row = selectModel?.rows().find((r) => r.selected);
+    const refBpm = row !== undefined && row.kind !== 'folder' ? row.entry.bpm.max : null;
+    greenOpt.innerHTML =
+      refBpm === null
+        ? 'GREEN <b>—</b>'
+        : `GREEN <b>${greenNumberFor(
+            refBpm,
+            playOptions.hiSpeed,
+            playOptions.suddenPlusEnabled ? playOptions.suddenPlusCover : 0,
+          )}</b>`;
     arrangeOpt.innerHTML = `ARRANGE <b>${playOptions.arrangement}</b>`;
     suddenOpt.innerHTML = `SUDDEN+ <b>${
       playOptions.suddenPlusEnabled ? `${playOptions.suddenPlusCover}%` : 'OFF'
@@ -558,6 +574,9 @@ export function bootShell(root: HTMLElement): void {
   }
 
   function renderSelectList(): void {
+    // Selection drives the GREEN readout, so every list re-render (cursor move,
+    // sort, filter, view toggle) refreshes the options bar too.
+    renderOptionsBar();
     listEl.textContent = '';
     if (selectModel === null) {
       sortLine.innerHTML = 'SORT <b>TITLE</b>';
