@@ -1,9 +1,9 @@
 {
-  "name": "iidx-web",
+  "name": "prismbeat",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Browser-only beatmania IIDX-style 7key+scratch rhythm game (TypeScript + Vite + PixiJS + Web Audio)",
+  "description": "Browser-only 7-key + turntable rhythm game (TypeScript + Vite + PixiJS + Web Audio)",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

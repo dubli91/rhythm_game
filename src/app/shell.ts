@@ -385,7 +385,7 @@ export function bootShell(root: HTMLElement): void {
   }
 
   // --- TITLE ---
-  titleEl.appendChild(el('h1', undefined, 'IIDX WEB'));
+  titleEl.appendChild(el('h1', undefined, 'PRISMBEAT'));
   titleEl.appendChild(el('div', 'subtitle', '7KEY + SCRATCH / BROWSER EDITION'));
   titleEl.appendChild(el('div', 'press-key', 'PRESS ANY KEY'));
   const bootNote = el('div', 'boot-note', 'loading song library…');

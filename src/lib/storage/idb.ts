@@ -1,5 +1,5 @@
 // IndexedDB access for the song library and practice patterns (song-library.md,
-// practice-mode.md). Database `iidx-web` holds three stores: `songs` (metadata + charts,
+// practice-mode.md). Database `prismbeat` holds three stores: `songs` (metadata + charts,
 // keyPath 'songId'), `audio` (out-of-line Blob keyed by songId), and `practicePatterns`
 // (keyPath 'patternId').
 //
@@ -16,7 +16,7 @@
 
 import type { Song } from '../chart/types';
 
-export const DB_NAME = 'iidx-web';
+export const DB_NAME = 'prismbeat';
 export const DB_VERSION = 1;
 
 export const STORES = {

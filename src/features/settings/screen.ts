@@ -514,7 +514,7 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
     const anchor = document.createElement('a');
     anchor.href = url;
     const stamp = new Date().toISOString().slice(0, 10);
-    anchor.download = `iidx-web-records-${stamp}.json`;
+    anchor.download = `prismbeat-records-${stamp}.json`;
     anchor.click();
     // Deferred: revoking synchronously can cancel the download the click just started.
     window.setTimeout(() => URL.revokeObjectURL(url), 30_000);

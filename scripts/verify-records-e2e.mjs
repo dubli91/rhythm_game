@@ -198,7 +198,7 @@ await step('export downloads the records.v1 envelope', async () => {
   const downloadPromise = page.waitForEvent('download', { timeout: 8000 });
   await page.click('[data-row="exportRecords"] button');
   const download = await downloadPromise;
-  if (!/^iidx-web-records-.*\.json$/.test(download.suggestedFilename()))
+  if (!/^prismbeat-records-.*\.json$/.test(download.suggestedFilename()))
     throw new Error(`filename ${download.suggestedFilename()}`);
   exportedPath = await download.path();
   const exported = JSON.parse(await readFile(exportedPath, 'utf8'));

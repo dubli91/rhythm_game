@@ -37,7 +37,7 @@ Run these after implementing to get immediate feedback:
 - `verbatimModuleSyntax` is on: type-only imports must use `import type`.
 - All localStorage access goes through `src/lib/storage/local.ts` (versioned single-doc keys:
   `settings.v1`, `playOptions.v1`, `records.v1`). All IndexedDB access goes through
-  `src/lib/storage/idb.ts` (db `iidx-web`, stores `songs`/`audio`/`practicePatterns`).
+  `src/lib/storage/idb.ts` (db `prismbeat`, stores `songs`/`audio`/`practicePatterns`).
 - `AudioContext.currentTime` is the only game clock; never use rAF timestamps for song time.
 - Play-domain contracts live in src/features/play/types.ts (JudgementEvent, GaugeType); engines (judgement/scoring/gauge) are pure and headless-tested; render.ts is read-only (never computes time); controller.ts owns the rAF loop and all state.
 - Screen transitions must go through createScreenMachine (src/app/screens.ts) — it throws on transitions not in specs/app-shell-navigation.md.
