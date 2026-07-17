@@ -209,6 +209,75 @@ await step('sort modes cycle (S) and persist to select.v1', async () => {
   await page.screenshot({ path: SHOT('8-sorted') });
 });
 
+await step('search (/): filters live, owns the keyboard while focused (SHOULD 11)', async () => {
+  await page.keyboard.press('Slash');
+  const focused = await page.evaluate(() => document.activeElement?.dataset?.role ?? '');
+  if (focused !== 'select-search') throw new Error(`Slash should focus the search box, got "${focused}"`);
+  await page.keyboard.type('neon');
+  const titles = await page.$$eval('.song-list li.song-row', (ls) => ls.map((l) => l.textContent));
+  if (titles.length !== 1 || !titles[0].includes('Neon Cascade'))
+    throw new Error(`filter "neon" should leave exactly Neon Cascade, got ${JSON.stringify(titles)}`);
+  let line = await page.$eval('.sort-line', (n) => n.textContent);
+  if (!line.includes('1 SONG')) throw new Error(`match count missing from readout: ${line}`);
+  // While typing, menu bindings must NOT fire: this 's' extends the filter (zero matches)
+  // instead of cycling the sort (app-shell-navigation.md MUST 17).
+  await page.keyboard.type('s');
+  const rowCount = await page.$$eval('.song-list li', (ls) => ls.length);
+  if (rowCount !== 0) throw new Error(`zero-match filter should empty the list, got ${rowCount} rows`);
+  line = await page.$eval('.sort-line', (n) => n.textContent);
+  if (!line.includes('SORT TITLE')) throw new Error(`typing "s" must not cycle sort: ${line}`);
+  await page.keyboard.press('Backspace'); // back to "neon" -> 1 song
+  await page.screenshot({ path: SHOT('8b-search') });
+  await page.keyboard.press('Escape'); // blurs the box, keys return to the list
+  const stillFocused = await page.evaluate(() => document.activeElement?.dataset?.role ?? '');
+  if (stillFocused === 'select-search') throw new Error('Escape should blur the search box');
+  await page.keyboard.press('KeyS'); // proves list bindings are live again
+  line = await page.$eval('.sort-line', (n) => n.textContent);
+  if (!line.includes('SORT LEVEL')) throw new Error(`S after blur should cycle sort: ${line}`);
+  await page.keyboard.press('KeyS');
+  await page.keyboard.press('KeyS'); // back to TITLE
+  // Clear the filter for the steps that follow.
+  await page.keyboard.press('Slash');
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Delete');
+  await page.keyboard.press('Escape');
+  const songCount = await page.$$eval('.song-list li.song-row', (ls) => ls.length);
+  if (songCount !== 3) throw new Error(`clearing the filter should restore 3 songs, got ${songCount}`);
+});
+
+await step('level folder view (F): charts group by level, persists to select.v1 (SHOULD 13)', async () => {
+  await page.keyboard.press('KeyF');
+  const line = await page.$eval('.sort-line', (n) => n.textContent);
+  if (!line.includes('LEVEL FOLDERS')) throw new Error(`readout should show LEVEL FOLDERS: ${line}`);
+  // Catalog levels: FL N4/H7, NC N6/H8, OC H9/A11 -> folders 4,6,7,8,9,11 with 1 chart each.
+  const folders = await page.$$eval('.song-list li.folder-row .folder-title', (ls) =>
+    ls.map((l) => l.textContent),
+  );
+  console.log(`  folders: ${JSON.stringify(folders)}`);
+  const levels = folders.map((f) => f.replace('LEVEL ', ''));
+  if (levels.join(',') !== '4,6,7,8,9,11')
+    throw new Error(`expected folders 4,6,7,8,9,11 ascending, got ${levels.join(',')}`);
+  const persisted = await page.evaluate(() => localStorage.getItem('select.v1'));
+  if (!persisted || !persisted.includes('"viewMode":"level"'))
+    throw new Error(`viewMode not persisted: ${persisted}`);
+  await page.keyboard.press('Enter'); // expand LEVEL 4 -> its one chart, selected
+  const selected = await page.$eval('.song-list li.selected', (n) => ({
+    text: n.textContent,
+    isChart: n.classList.contains('chart-row'),
+  }));
+  console.log(`  selected in folder: ${JSON.stringify(selected)}`);
+  if (!selected.isChart || !selected.text.includes('First Light') || !selected.text.includes('NORMAL'))
+    throw new Error('LEVEL 4 folder should open onto First Light NORMAL with the song named on the row');
+  await page.screenshot({ path: SHOT('8c-folders') });
+  await page.keyboard.press('Escape'); // collapse the folder
+  const chartRows = await page.$$eval('.song-list li.chart-row', (ls) => ls.length);
+  if (chartRows !== 0) throw new Error('Escape should collapse the folder');
+  await page.keyboard.press('KeyF'); // back to song view for the steps that follow
+  const doc = await page.evaluate(() => localStorage.getItem('select.v1'));
+  if (!doc || !doc.includes('"viewMode":"song"'))
+    throw new Error(`toggling back should persist song view: ${doc}`);
+});
+
 await step('hi-speed adjust from options panel persists', async () => {
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');

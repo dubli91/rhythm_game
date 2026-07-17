@@ -30,8 +30,10 @@ import {
   type RecordLookup,
   type SelectModel,
   type SortMode,
+  type ViewMode,
   createSelectModel,
   isSortMode,
+  isViewMode,
 } from '../features/select/model';
 import {
   type PreviewAudioContextLike,
@@ -74,9 +76,12 @@ interface PlayOptionsDoc {
 // truth) — the shell only adds the storage validator below.
 type SettingsDoc = SettingsValues;
 
-/** Select-screen preferences persisted separately from play options (song-select.md MUST 4). */
+/** Select-screen preferences persisted separately from play options (song-select.md MUST 4).
+ * The search filter is deliberately NOT persisted — a stale filter would silently hide
+ * songs on the next boot (decision recorded in select/model.ts). */
 interface SelectDoc {
   sortMode: SortMode;
+  viewMode: ViewMode;
 }
 
 interface LoadedPlayData {
@@ -119,6 +124,10 @@ const STYLES = `
   .lamp-FULL_COMBO { color: #10101c; background: linear-gradient(90deg, #ff5f7a, #ffe066, #6ffce0, #7df3ff); }
   .sort-line { color: #55557a; font-size: 12px; letter-spacing: 0.14em; margin-bottom: 8px; }
   .sort-line b { color: #7df3ff; }
+  .search-line { display: flex; gap: 10px; align-items: center; color: #55557a; font-size: 12px; letter-spacing: 0.14em; margin-bottom: 8px; }
+  .select-search { background: #10101c; border: 1px solid #2a2a44; border-radius: 4px; color: #e8e8f0; padding: 4px 10px; font-size: 13px; width: 220px; font-family: inherit; }
+  .select-search:focus { outline: none; border-color: #7df3ff; }
+  .song-list .folder-title { color: #ffc24a; font-weight: 700; letter-spacing: 0.12em; }
   .diff-NORMAL { color: #6fd0ff; border: 1px solid #6fd0ff55; }
   .diff-HYPER { color: #ffc24a; border: 1px solid #ffc24a55; }
   .diff-ANOTHER { color: #ff5f7a; border: 1px solid #ff5f7a55; }
@@ -258,12 +267,16 @@ function isPlayOptionsDoc(data: unknown): data is PlayOptionsDoc {
 }
 
 function defaultSelectDoc(): SelectDoc {
-  return { sortMode: 'title' };
+  return { sortMode: 'title', viewMode: 'song' };
 }
 
+// Same tolerance policy as isPlayOptionsDoc: fields added after a doc was stored may be
+// ABSENT (read path spreads over defaults) but must validate when present.
 function isSelectDoc(data: unknown): data is SelectDoc {
   if (typeof data !== 'object' || data === null) return false;
-  return isSortMode((data as Record<string, unknown>).sortMode);
+  const doc = data as Record<string, unknown>;
+  if (!isSortMode(doc.sortMode)) return false;
+  return doc.viewMode === undefined || isViewMode(doc.viewMode);
 }
 
 function isSettingsDoc(data: unknown): data is SettingsDoc {
@@ -423,6 +436,29 @@ export function bootShell(root: HTMLElement): void {
   selectEl.appendChild(errorBanner);
   const sortLine = el('div', 'sort-line');
   selectEl.appendChild(sortLine);
+  // Search box (song-select.md SHOULD 11): '/' focuses it, typing filters live. While
+  // focused it owns the keyboard (app-shell-navigation.md MUST 17) — stopPropagation
+  // keeps the menu bindings (S/G/R/A/arrows…) from firing mid-word; Escape/Enter blur,
+  // handing control back to the list. The filter itself stays (visible in the box).
+  const searchLine = el('div', 'search-line');
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.className = 'select-search';
+  searchInput.placeholder = 'title / artist';
+  searchInput.dataset.role = 'select-search';
+  searchLine.append(el('span', undefined, 'SEARCH'), searchInput);
+  selectEl.appendChild(searchLine);
+  searchInput.addEventListener('input', () => {
+    selectModel?.setFilter(searchInput.value);
+    renderSelectList();
+  });
+  searchInput.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.code === 'Escape' || event.code === 'Enter') {
+      event.preventDefault();
+      searchInput.blur();
+    }
+  });
   const listEl = el('ul', 'song-list');
   selectEl.appendChild(listEl);
   const optionsBar = el('div', 'options-bar');
@@ -437,7 +473,7 @@ export function bootShell(root: HTMLElement): void {
     el(
       'div',
       'hint',
-      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · G gauge · ←/→ hi-speed · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · P practice · O settings · keys: LShift S D F Space J K L',
+      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · F folders · / search · G gauge · ←/→ hi-speed · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · P practice · O settings · keys: LShift S D F Space J K L',
     ),
   );
 
@@ -471,9 +507,10 @@ export function bootShell(root: HTMLElement): void {
   function selectedPreviewTarget(): PreviewTarget | null {
     if (selectModel === null) return null;
     const row = selectModel.rows().find((r) => r.selected);
-    // Chart rows inherit their song's preview; entries without preview metadata
-    // (no catalogEntry, e.g. imported songs) simply stay silent.
-    const catalogEntry = row?.entry.catalogEntry;
+    // Chart rows inherit their song's preview; folder rows have no song and entries
+    // without preview metadata (no catalogEntry, e.g. imported songs) stay silent.
+    const catalogEntry =
+      row === undefined || row.kind === 'folder' ? undefined : row.entry.catalogEntry;
     if (catalogEntry?.preview === undefined) return null;
     return {
       songId: catalogEntry.songId,
@@ -522,13 +559,36 @@ export function bootShell(root: HTMLElement): void {
 
   function renderSelectList(): void {
     listEl.textContent = '';
-    const mode = selectModel?.sortMode() ?? 'title';
-    sortLine.innerHTML = `SORT <b>${mode.toUpperCase()}</b>`;
-    if (selectModel === null) return;
+    if (selectModel === null) {
+      sortLine.innerHTML = 'SORT <b>TITLE</b>';
+      return;
+    }
+    const view = selectModel.viewMode();
+    // Sort modes only order the SONG view (LEVEL view is fixed level-ascending),
+    // so the readout hides SORT there rather than showing a dead setting.
+    let line =
+      view === 'level'
+        ? 'VIEW <b>LEVEL FOLDERS</b>'
+        : `VIEW <b>SONGS</b> · SORT <b>${selectModel.sortMode().toUpperCase()}</b>`;
+    if (selectModel.filterText() !== '') {
+      const { songs, charts } = selectModel.filteredCounts();
+      line += ` · FILTER <b>${songs} SONG${songs === 1 ? '' : 'S'} / ${charts} CHART${charts === 1 ? '' : 'S'}</b>`;
+    }
+    sortLine.innerHTML = line;
+    listEl.dataset.viewMode = view;
     selectModel.rows().forEach((row, index) => {
-      const li = el('li', row.kind === 'song' ? 'song-row' : 'chart-row');
+      const li = el(
+        'li',
+        row.kind === 'song' ? 'song-row' : row.kind === 'folder' ? 'folder-row' : 'chart-row',
+      );
       if (row.selected) li.classList.add('selected');
-      if (row.kind === 'song') {
+      if (row.kind === 'folder') {
+        li.appendChild(el('span', 'expander', row.expanded ? '▾' : '▸'));
+        li.appendChild(el('span', 'title folder-title', `LEVEL ${row.level}`));
+        li.appendChild(
+          el('span', 'meta', `${row.chartCount} chart${row.chartCount === 1 ? '' : 's'}`),
+        );
+      } else if (row.kind === 'song') {
         li.appendChild(el('span', 'expander', row.expanded ? '▾' : '▸'));
         li.appendChild(el('span', 'title', row.entry.title));
         const bpm =
@@ -547,6 +607,8 @@ export function bootShell(root: HTMLElement): void {
             `${row.chart.difficulty} ${row.chart.level}`,
           ),
         );
+        // Inside a level folder the chart row is the only place the song is named.
+        if (view === 'level') li.appendChild(el('span', 'title', row.entry.title));
         li.appendChild(el('span', 'meta', `${row.chart.noteCount} notes`));
         const recordEl = el('span', 'record');
         const lamp = row.record?.lamp ?? 'NO_PLAY';
@@ -575,7 +637,10 @@ export function bootShell(root: HTMLElement): void {
 
   function saveSelectDoc(): void {
     try {
-      selectDoc.write({ sortMode: selectModel?.sortMode() ?? 'title' });
+      selectDoc.write({
+        sortMode: selectModel?.sortMode() ?? 'title',
+        viewMode: selectModel?.viewMode() ?? 'song',
+      });
     } catch (err) {
       console.error('failed to persist select preferences', err);
     }
@@ -968,6 +1033,17 @@ export function bootShell(root: HTMLElement): void {
         playMenuSfx('move');
         saveSelectDoc();
         renderSelectList();
+      } else if (event.code === 'KeyF') {
+        // Level-folder view toggle (song-select.md SHOULD 13); persisted like sort mode.
+        selectModel.toggleViewMode();
+        playMenuSfx('move');
+        saveSelectDoc();
+        renderSelectList();
+      } else if (event.code === 'Slash') {
+        // preventDefault keeps the '/' keystroke from typing into the just-focused box.
+        event.preventDefault();
+        playMenuSfx('move');
+        searchInput.focus();
       } else if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
         event.preventDefault();
         const direction = event.code === 'ArrowRight' ? 1 : -1;
@@ -1052,10 +1128,13 @@ export function bootShell(root: HTMLElement): void {
         return;
       }
       if (selectModel === null) {
+        // Spread over defaults fills fields added after the doc was stored (see validator).
+        const prefs = { ...defaultSelectDoc(), ...selectDoc.read() };
         selectModel = createSelectModel({
           entries: library.entries,
           records: recordLookup,
-          sortMode: selectDoc.read().sortMode,
+          sortMode: prefs.sortMode,
+          viewMode: prefs.viewMode,
         });
       }
       // Non-fatal library problems (e.g. imported songs unavailable) surface on the

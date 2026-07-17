@@ -13,7 +13,10 @@ const browser = await chromium.launch({
   headless: true,
   args: ['--autoplay-policy=no-user-gesture-required', '--enable-unsafe-swiftshader'],
 });
-const page = await browser.newPage({ viewport: { width: 1400, height: 800 }, acceptDownloads: true });
+const page = await browser.newPage({
+  viewport: { width: 1400, height: 800 },
+  acceptDownloads: true,
+});
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => {
   if (m.type() === 'error') errors.push(`console.error: ${m.text()}`);
