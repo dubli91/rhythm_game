@@ -40,6 +40,10 @@
 13. 기록 섹션: 통계와 내보내기/가져오기를 모으는 다섯 번째 섹션을 둔다(SHOULD 티어). 플레이어 통계(총 플레이 수·램프 분포·레벨별 클리어 현황, [results-records](results-records.md) SHOULD 11)는 오프셋 보정 진입처럼 별도 화면 상태(app-shell-navigation 화면 열거형)를 만들지 않으며, 설정 화면 내 모달로 연다. 기록 JSON 내보내기/가져오기 진입점([results-records](results-records.md) SHOULD 10)도 이 섹션에 둔다. 통계·내보내기/가져오기 로직 자체는 이 스펙에서 정의하지 않는다.
 14. localStorage 키 이름을 표준화한다: 설정은 `settings.v1` 형식의 단일 버전 문서 하나로 저장한다 (키 매핑·오프셋·볼륨 포함).
 
+### 스크래치 보조 키 — MUST
+
+15. 키 컨피그의 스크래치 레인 행은 기본 키와 보조 키 두 슬롯을 표시한다([input-handling](input-handling.md) MUST 12). 보조 슬롯은 캡처로 할당하고 별도 조작(예: 삭제 버튼/키)으로 해제할 수 있으며, 비어 있을 수 있다. 중복·예약 키 규칙(MUST 7·10)과 즉시 저장·적용(MUST 11)은 두 슬롯 모두에 동일하게 적용된다. 스크래치 레인별 초기화(MUST 8)는 보조 슬롯도 함께 비운다.
+
 ## 수용 기준
 
 - [ ] 키보드만으로 곡 선택 → 설정 진입 → 각 섹션 이동 → 값 변경 → Escape로 곡 선택 복귀까지 가능하다.
@@ -49,11 +53,12 @@
 - [ ] 캡처 모드에서 Escape는 캡처만 취소한다; 캡처 모드가 아닐 때 Escape는 곡 선택으로 돌아간다.
 - [ ] 예약 키(PageUp/PageDown/Home/ArrowUp/ArrowDown/Escape/F1)는 레인에 할당되지 않는다.
 - [ ] 새로고침 후에도 키 매핑·오프셋·볼륨이 유지된다.
+- [ ] 스크래치 보조 키를 할당·해제할 수 있고, 보조 키에도 중복·예약 키 거부가 동일하게 적용된다.
 
 ## 의존 관계
 
 - 진입: [song-select](song-select.md) (MUST 10, 설정 목적지)
-- 위임: [input-handling](input-handling.md) (키 재할당 로직·저장, MUST 7-9), [audio-playback](audio-playback.md) (오프셋·볼륨 값·보정 로직, MUST 7, 9 / SHOULD 10-11)
+- 위임: [input-handling](input-handling.md) (키 재할당 로직·저장, MUST 7-9 / 스크래치 보조 키, MUST 12-14), [audio-playback](audio-playback.md) (오프셋·볼륨 값·보정 로직, MUST 7, 9 / SHOULD 10-11)
 - 진입점 제공: [results-records](results-records.md) (SHOULD 10 내보내기/가져오기, SHOULD 11 통계 — 기록 섹션)
 - 참조: [play-options](play-options.md) (플레이 중 조작 키와의 충돌 회피, MUST 3, 6)
 

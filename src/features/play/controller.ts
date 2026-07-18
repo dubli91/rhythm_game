@@ -15,7 +15,7 @@ import { createDevOverlay } from './devOverlay';
 import { type ClearLamp, clearLampFor, createGauge } from './gauge';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, createPlayInput } from './input';
 import { createJudge } from './judgement';
-import { clampCover, stepCover, stepHiSpeed } from './options';
+import { clampCover, clampGreenTarget, stepCover, stepGreenTarget, stepHiSpeed } from './options';
 import {
   NOTE_BROKEN,
   NOTE_CONSUMED,
@@ -23,6 +23,8 @@ import {
   NOTE_MISSED,
   type PlayFrameView,
   createPlayfieldRenderer,
+  greenNumberFor,
+  lockedHiSpeedFor,
 } from './render';
 import { createScorer } from './scoring';
 import type { ScoreSummary } from './scoring';
@@ -52,6 +54,10 @@ export interface PlayResult {
   suddenPlusEnabled: boolean;
   /** 0..80 (%) */
   suddenPlusCover: number;
+  /** Green-number lock (play-options.md MUST 15/16): the in-play PageUp/PageDown
+   *  target adjustments persist via the final value, like hiSpeed. */
+  greenLockEnabled: boolean;
+  greenLockTargetMs: number;
 }
 
 export interface PlaySessionOptions {
@@ -75,6 +81,12 @@ export interface PlaySessionOptions {
   suddenPlusEnabled?: boolean;
   /** 0..80 (%) */
   suddenPlusCover?: number;
+  /** Green-number lock (play-options.md MUST 15-17): when enabled the effective
+   *  hi-speed is derived per frame from the current BPM + cover; hiSpeed above
+   *  is kept as the untouched manual value. ON/OFF is a select-panel decision —
+   *  it cannot be toggled mid-play, only the target adjusts. */
+  greenLockEnabled?: boolean;
+  greenLockTargetMs?: number;
   onFinished(result: PlayResult): void;
 }
 
@@ -160,6 +172,15 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   let hiSpeed = opts.hiSpeed ?? 1.0;
   let suddenEnabled = opts.suddenPlusEnabled ?? false;
   let suddenCover = clampCover(opts.suddenPlusCover ?? 0);
+  // Green-number lock (play-options.md MUST 15-17): display-only — it feeds the
+  // renderer's hiSpeed, never the judge/gauge, so results are provably identical
+  // to manual mode for the same inputs.
+  const greenLock = opts.greenLockEnabled ?? false;
+  let greenTargetMs = clampGreenTarget(opts.greenLockTargetMs ?? 1000);
+  // Judgement explosions (playfield-rendering.md MUST 17): per-lane last
+  // PGREAT/GREAT hit time; stable arrays shared with the frame view.
+  const explosionAtMs = new Float64Array(8).fill(Number.NEGATIVE_INFINITY);
+  const explosionPgreat = new Uint8Array(8);
   // Option-change flash is pure UI feedback, so wall-clock time is fine here —
   // the audio clock stays reserved for anything that touches judgement.
   let optionFlashText = '';
@@ -169,6 +190,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   // dataset because e2e cannot read canvas text.
   const devOverlay = createDevOverlay();
   let lastDevMirrored = '';
+  let lastGreenMirrored = '';
 
   function flashOption(text: string): void {
     optionFlashText = text;
@@ -187,6 +209,8 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     combo: 0,
     exScore: 0,
     lastJudgement: null,
+    explosionAtMs,
+    explosionPgreat,
     suddenPlusEnabled: suddenEnabled,
     suddenPlusCover: suddenCover,
     optionFlashText: '',
@@ -210,6 +234,13 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     // A completed hold is silent — the head's judgement text is the note's grade.
     if (event.kind !== 'cnComplete') {
       lastJudgement = { grade: event.grade, kind: event.kind, atSongTimeMs: event.songTimeMs };
+    }
+    // Explosion on PGREAT/GREAT hits only (playfield-rendering.md MUST 17):
+    // kind === 'hit' covers taps AND CN heads while excluding cnComplete, whose
+    // PGREAT grade is cosmetic (never scored or displayed).
+    if (event.kind === 'hit' && (event.grade === 'PGREAT' || event.grade === 'GREAT')) {
+      explosionAtMs[event.lane] = event.songTimeMs;
+      explosionPgreat[event.lane] = event.grade === 'PGREAT' ? 1 : 0;
     }
   }
 
@@ -241,8 +272,15 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
           break;
         case 'hiSpeedUp':
         case 'hiSpeedDown':
-          hiSpeed = stepHiSpeed(hiSpeed, e.action === 'hiSpeedUp' ? 1 : -1);
-          flashOption(`HI-SPEED ${hiSpeed.toFixed(2)}`);
+          if (greenLock) {
+            // Locked mode repurposes PageUp/PageDown for the target (MUST 16):
+            // PageUp = faster = shorter visible time, so the target DECREASES.
+            greenTargetMs = stepGreenTarget(greenTargetMs, e.action === 'hiSpeedUp' ? -1 : 1);
+            flashOption(`GREEN TARGET ${greenTargetMs}`);
+          } else {
+            hiSpeed = stepHiSpeed(hiSpeed, e.action === 'hiSpeedUp' ? 1 : -1);
+            flashOption(`HI-SPEED ${hiSpeed.toFixed(2)}`);
+          }
           break;
         case 'suddenToggle':
           suddenEnabled = !suddenEnabled;
@@ -270,6 +308,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     input.detach();
     renderer.destroy();
     delete opts.mount.dataset.devOverlay;
+    delete opts.mount.dataset.green;
   }
 
   function buildResult(endProgress: number, finishedSong: boolean): PlayResult {
@@ -291,6 +330,8 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
       arrangement: resolvedArrangement,
       suddenPlusEnabled: suddenEnabled,
       suddenPlusCover: suddenCover,
+      greenLockEnabled: greenLock,
+      greenLockTargetMs: greenTargetMs,
     };
   }
 
@@ -373,7 +414,13 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     view.songTimeMs = t;
     view.currentBeat = beat;
     view.currentBpm = bpmAtBeat(chart, beat);
-    view.hiSpeed = hiSpeed;
+    // Green-number lock (play-options.md MUST 15/17): re-derive the effective
+    // hi-speed every frame from the live BPM + cover, so soflan and in-play
+    // cover changes keep the visible time pinned to the target (clamped to the
+    // manual range — the HUD GREEN then shows the true, differing value).
+    view.hiSpeed = greenLock
+      ? lockedHiSpeedFor(view.currentBpm, greenTargetMs, suddenEnabled ? suddenCover : 0)
+      : hiSpeed;
     view.suddenPlusEnabled = suddenEnabled;
     view.suddenPlusCover = suddenCover;
     view.optionFlashText = performance.now() < optionFlashUntilMs ? optionFlashText : '';
@@ -388,6 +435,16 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     if (devText !== lastDevMirrored) {
       opts.mount.dataset.devOverlay = devText;
       lastDevMirrored = devText;
+    }
+    // Mirror the HUD green number for e2e (canvas text is unreadable there) —
+    // same pattern as data-dev-overlay. This is what proves "GREEN holds the
+    // target through a BPM change" at the browser surface.
+    const greenMirror = String(
+      greenNumberFor(view.currentBpm, view.hiSpeed, suddenEnabled ? suddenCover : 0),
+    );
+    if (greenMirror !== lastGreenMirrored) {
+      opts.mount.dataset.green = greenMirror;
+      lastGreenMirrored = greenMirror;
     }
     renderer.update(view);
 

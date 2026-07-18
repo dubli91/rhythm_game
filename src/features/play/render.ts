@@ -12,7 +12,7 @@
 
 import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import type { Chart, Note } from '../../lib/chart/types';
-import { type ScrollGeometry, greenNumberMs } from './options';
+import { type ScrollGeometry, greenNumberMs, hiSpeedForGreenTarget } from './options';
 import type { GaugeType, JudgementGrade, JudgementKind } from './types';
 
 export interface PlayRenderInit {
@@ -55,6 +55,13 @@ export interface PlayFrameView {
   combo: number;
   exScore: number;
   lastJudgement: { grade: JudgementGrade; kind: JudgementKind; atSongTimeMs: number } | null;
+  /** Judgement explosions (spec MUST 17): per-lane song time of the last
+   *  PGREAT/GREAT hit (CN heads included; autoplay too), −Infinity when none.
+   *  Length 8; the controller only ever overwrites entries — the renderer hides
+   *  an explosion once its age passes EXPLOSION_MS. */
+  explosionAtMs: Float64Array;
+  /** Parallel to explosionAtMs: 1 = PGREAT (bigger/brighter), 0 = GREAT. */
+  explosionPgreat: Uint8Array;
   /** Multi-line stats block for the practice HUD; ignored by the song HUD. */
   infoText?: string;
   /** SUDDEN+ cover over the top of the lanes (spec MUST 11, play-options.md MUST 5-7). */
@@ -109,6 +116,11 @@ export const RENDER_LAYOUT = {
   JUDGEMENT_HOLD_MS: 500,
   PGREAT_FLASH_MS: 50,
 
+  // Judgement explosion (spec MUST 17): gone well inside the 300ms budget.
+  // PGREAT reuses the PGREAT_FLASH_MS flicker cadence so it reads as the MUST 10
+  // flash, extended down to the lane rather than replaced by something alien.
+  EXPLOSION_MS: 260,
+
   // Option-change flash sits in the gap between judgement line (600) and gauge (645).
   OPTION_FLASH_Y: 622,
   COVER_COLOR: 0x0d0f1a,
@@ -149,6 +161,13 @@ const SCROLL_GEOMETRY: ScrollGeometry = {
  *  The formula lives in options.ts; only the px constants come from here. */
 export function greenNumberFor(bpm: number, hiSpeed: number, coverPercent: number): number {
   return greenNumberMs(bpm, hiSpeed, coverPercent, SCROLL_GEOMETRY);
+}
+
+/** Effective hi-speed under green-number lock (play-options.md MUST 15/17),
+ *  bound to this renderer's geometry exactly like greenNumberFor so the lock
+ *  and the readout can never disagree about the px constants. */
+export function lockedHiSpeedFor(bpm: number, targetMs: number, coverPercent: number): number {
+  return hiSpeedForGreenTarget(bpm, targetMs, coverPercent, SCROLL_GEOMETRY);
 }
 
 // Lane background colors: near-black alternating, scratch slightly red-tinted.
@@ -241,14 +260,17 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   mount.appendChild(canvas);
 
   // ── Scene graph, ordered back-to-front (spec: bg < beams < CN bodies < notes < line
-  // < cover < HUD). CN bodies sit under head chips so the chip reads as the note edge;
-  // the SUDDEN+ cover must occlude notes/beams (spec MUST 11) but never the HUD.
+  // < cover < effects < HUD). CN bodies sit under head chips so the chip reads as the
+  // note edge; the SUDDEN+ cover must occlude notes/beams (spec MUST 11) but never the
+  // HUD. Explosions (MUST 17) sit above the cover — a hit at the line must stay visible
+  // at any cover height — but below the HUD so judgement text/combo keep priority.
   const bgContainer = new Container();
   const beamContainer = new Container();
   const bodyContainer = new Container();
   const notesContainer = new Container();
   const lineContainer = new Container();
   const coverContainer = new Container();
+  const effectsContainer = new Container();
   const hudContainer = new Container();
   app.stage.addChild(
     bgContainer,
@@ -257,6 +279,7 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     notesContainer,
     lineContainer,
     coverContainer,
+    effectsContainer,
     hudContainer,
   );
 
@@ -344,6 +367,35 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     }
   }
   growBodyPool(8);
+
+  // Judgement explosions (spec MUST 17): a fixed two-sprite rig per lane —
+  // a rotated diamond core plus a horizontal flare bar at the judgement line,
+  // both additive so overlapping dense-chart bursts brighten instead of muddying.
+  // At most one explosion animates per lane (a new hit restarts it), so 16
+  // pre-created sprites cover every chart with zero per-frame allocation
+  // (MUST 12); only numeric properties mutate per frame.
+  const explosionCores: Sprite[] = new Array(8);
+  const explosionFlares: Sprite[] = new Array(8);
+  for (let i = 0; i <= 7; i++) {
+    const cx = (lane.x[i] ?? 0) + (lane.w[i] ?? 0) / 2;
+    const core = new Sprite(Texture.WHITE);
+    core.anchor.set(0.5);
+    core.x = cx;
+    core.y = L.JUDGEMENT_LINE_Y;
+    core.rotation = Math.PI / 4;
+    core.blendMode = 'add';
+    core.visible = false;
+    explosionCores[i] = core;
+    effectsContainer.addChild(core);
+    const flare = new Sprite(Texture.WHITE);
+    flare.anchor.set(0.5);
+    flare.x = cx;
+    flare.y = L.JUDGEMENT_LINE_Y;
+    flare.blendMode = 'add';
+    flare.visible = false;
+    explosionFlares[i] = flare;
+    effectsContainer.addChild(flare);
+  }
 
   // ── HUD text ──────────────────────────────────────────────────────────────
   const titleText = new Text({
@@ -638,6 +690,51 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
       const beam = beams[i];
       if (beam === undefined) continue;
       beam.visible = view.heldLanes[i] === true;
+    }
+
+    // Judgement explosions (spec MUST 17): driven purely by age = songTime −
+    // hit time, like the PGREAT text flash — no stored animation state, so a
+    // dropped frame just samples the curve later. PGREAT is larger + brighter
+    // and flickers on the MUST 10 cadence; GREAT is a steady, smaller burst.
+    for (let i = 0; i <= 7; i++) {
+      const core = explosionCores[i];
+      const flare = explosionFlares[i];
+      if (core === undefined || flare === undefined) continue;
+      const at = view.explosionAtMs[i] ?? Number.NEGATIVE_INFINITY;
+      const age = view.songTimeMs - at;
+      if (age >= 0 && age < L.EXPLOSION_MS) {
+        const p = age / L.EXPLOSION_MS;
+        const fade = 1 - p;
+        const w = lane.w[i] ?? L.KEY_WIDTH;
+        if (view.explosionPgreat[i] === 1) {
+          const phase = Math.floor(age / L.PGREAT_FLASH_MS) % 2;
+          const tint = phase === 0 ? GRADE_PGREAT_A : GRADE_PGREAT_B;
+          core.tint = tint;
+          flare.tint = tint;
+          const side = w * (0.8 + 0.9 * p);
+          core.width = side;
+          core.height = side;
+          core.alpha = 0.95 * fade;
+          flare.width = w * (1.0 + 1.1 * p);
+          flare.height = 26 * (1 - 0.6 * p);
+          flare.alpha = 0.8 * fade;
+        } else {
+          core.tint = GRADE_GREAT;
+          flare.tint = GRADE_GREAT;
+          const side = w * (0.55 + 0.45 * p);
+          core.width = side;
+          core.height = side;
+          core.alpha = 0.7 * fade;
+          flare.width = w * (1.0 + 0.5 * p);
+          flare.height = 16 * (1 - 0.6 * p);
+          flare.alpha = 0.5 * fade;
+        }
+        core.visible = true;
+        flare.visible = true;
+      } else {
+        core.visible = false;
+        flare.visible = false;
+      }
     }
 
     // Judgement + combo text (spec MUST 10).

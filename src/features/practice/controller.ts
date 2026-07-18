@@ -27,12 +27,19 @@ import { createSongClock } from '../../lib/clock/audioClock';
 import { createDevOverlay } from './../play/devOverlay';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, createPlayInput } from './../play/input';
 import { type Judge, createJudge } from './../play/judgement';
-import { clampCover, stepCover, stepHiSpeed } from './../play/options';
+import {
+  clampCover,
+  clampGreenTarget,
+  stepCover,
+  stepGreenTarget,
+  stepHiSpeed,
+} from './../play/options';
 import {
   NOTE_CONSUMED,
   NOTE_MISSED,
   type PlayFrameView,
   createPlayfieldRenderer,
+  lockedHiSpeedFor,
 } from './../play/render';
 import type { JudgementEvent } from './../play/types';
 import { MAX_PATTERN_BPM, MIN_PATTERN_BPM, type PracticePattern, sortNotes } from './pattern';
@@ -66,6 +73,9 @@ export interface PracticeOutcome {
   hiSpeed: number;
   suddenPlusEnabled: boolean;
   suddenPlusCover: number;
+  /** Green-number lock final values (play-options.md MUST 16 persistence policy). */
+  greenLockEnabled: boolean;
+  greenLockTargetMs: number;
 }
 
 export interface PracticeSessionOptions {
@@ -82,6 +92,11 @@ export interface PracticeSessionOptions {
   hiSpeed?: number;
   suddenPlusEnabled?: boolean;
   suddenPlusCover?: number;
+  /** Green-number lock (play-options.md MUST 15-17) — honored here too so the
+   *  scroll feel matches song play ("Hi-speed/SUDDEN+ behave exactly like song
+   *  play", practice-mode.md MUST 9 precedent). */
+  greenLockEnabled?: boolean;
+  greenLockTargetMs?: number;
   onExit(outcome: PracticeOutcome): void;
 }
 
@@ -172,6 +187,11 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
   let hiSpeed = opts.hiSpeed ?? 1.0;
   let suddenEnabled = opts.suddenPlusEnabled ?? false;
   let suddenCover = clampCover(opts.suddenPlusCover ?? 0);
+  const greenLock = opts.greenLockEnabled ?? false;
+  let greenTargetMs = clampGreenTarget(opts.greenLockTargetMs ?? 1000);
+  // Judgement explosions (playfield-rendering.md MUST 17 — practice included).
+  const explosionAtMs = new Float64Array(8).fill(Number.NEGATIVE_INFINITY);
+  const explosionPgreat = new Uint8Array(8);
   let optionFlashText = '';
   let optionFlashUntilMs = 0;
   let infoDirty = true;
@@ -217,6 +237,12 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
       }
     }
     lastJudgement = { grade: event.grade, kind: event.kind, atSongTimeMs: event.songTimeMs };
+    // Explosion on PGREAT/GREAT hits (playfield-rendering.md MUST 17). Practice
+    // patterns are tap-only, so kind === 'hit' is every scored press here.
+    if (event.kind === 'hit' && (event.grade === 'PGREAT' || event.grade === 'GREAT')) {
+      explosionAtMs[event.lane] = event.songTimeMs;
+      explosionPgreat[event.lane] = event.grade === 'PGREAT' ? 1 : 0;
+    }
     infoDirty = true;
   }
 
@@ -252,8 +278,14 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
           break;
         case 'hiSpeedUp':
         case 'hiSpeedDown':
-          hiSpeed = stepHiSpeed(hiSpeed, e.action === 'hiSpeedUp' ? 1 : -1);
-          flashOption(`HI-SPEED ${hiSpeed.toFixed(2)}`);
+          if (greenLock) {
+            // PageUp = faster = shorter visible time (play-options.md MUST 16).
+            greenTargetMs = stepGreenTarget(greenTargetMs, e.action === 'hiSpeedUp' ? -1 : 1);
+            flashOption(`GREEN TARGET ${greenTargetMs}`);
+          } else {
+            hiSpeed = stepHiSpeed(hiSpeed, e.action === 'hiSpeedUp' ? 1 : -1);
+            flashOption(`HI-SPEED ${hiSpeed.toFixed(2)}`);
+          }
           break;
         case 'suddenToggle':
           suddenEnabled = !suddenEnabled;
@@ -293,6 +325,8 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     combo: 0,
     exScore: 0,
     lastJudgement: null,
+    explosionAtMs,
+    explosionPgreat,
     suddenPlusEnabled: suddenEnabled,
     suddenPlusCover: suddenCover,
     optionFlashText: '',
@@ -316,6 +350,8 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
       hiSpeed,
       suddenPlusEnabled: suddenEnabled,
       suddenPlusCover: suddenCover,
+      greenLockEnabled: greenLock,
+      greenLockTargetMs: greenTargetMs,
     };
   }
 
@@ -411,7 +447,11 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     view.songTimeMs = t;
     view.currentBeat = sessionBeatAt(cycles, tSec);
     view.currentBpm = cycle?.bpm ?? pendingBpm;
-    view.hiSpeed = hiSpeed;
+    // Green-number lock re-derives per frame like song play; practice BPM only
+    // changes at loop boundaries, so this reacts there + on cover changes.
+    view.hiSpeed = greenLock
+      ? lockedHiSpeedFor(view.currentBpm, greenTargetMs, suddenEnabled ? suddenCover : 0)
+      : hiSpeed;
     view.suddenPlusEnabled = suddenEnabled;
     view.suddenPlusCover = suddenCover;
     view.optionFlashText = performance.now() < optionFlashUntilMs ? optionFlashText : '';

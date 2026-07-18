@@ -409,6 +409,76 @@ await step('in-play option keys adjust hi-speed/cover; results + persistence', a
   await page.screenshot({ path: SHOT('12-after-inplay-options') });
 });
 
+await step(
+  'green-number lock: seed + AUTO readout + soflan HUD invariance + persistence (play-options MUST 15-17)',
+  async () => {
+    await page.keyboard.press('Home'); // SUDDEN+ 30% -> OFF so figures are cover-free
+    await navigateToSong('Neon Cascade'); // 140-175 soflan; select GREEN uses max BPM 175
+    let bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('G-LOCK OFF')) throw new Error(`G-LOCK should default OFF: ${bar}`);
+    // Toggle ON: the target seeds from the current manual green so the feel
+    // doesn't jump — HS 1.75 @175 BPM = 904ms, snapped to the 10ms grid = 900.
+    await page.keyboard.press('KeyL');
+    bar = await page.$eval('.options-bar', (n) => n.textContent);
+    console.log(`  options bar: ${bar}`);
+    if (!bar.includes('G-LOCK 900ms'))
+      throw new Error(`lock should seed 900ms from HS 1.75 @175: ${bar}`);
+    if (!bar.includes('GREEN 900'))
+      throw new Error(`GREEN should show the (unclamped) target under lock: ${bar}`);
+    if (!bar.includes('HI-SPEED AUTO'))
+      throw new Error(`HI-SPEED should read AUTO under lock: ${bar}`);
+    // Locked arrows adjust the target: → = faster = −10ms (mirrors in-play PageUp).
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('G-LOCK 880ms') || !bar.includes('GREEN 880'))
+      throw new Error(`arrows should step the locked target to 880: ${bar}`);
+
+    // Play through the 140→175 change (beat 64 ≈ 28.4s incl. lead-in): the HUD
+    // green (mirrored to data-green) must hold the target on BOTH sides.
+    await page.keyboard.press('Enter'); // expand
+    await page.waitForSelector('.song-list li.chart-row', { timeout: 5000 });
+    await page.keyboard.press('Enter'); // play NORMAL (autoplay still ON)
+    await page.waitForSelector('.screen-play canvas', { timeout: 20000 });
+    await page.waitForTimeout(3000); // BPM 140 section
+    const green140 = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.green ?? '');
+    if (green140 !== '880')
+      throw new Error(`HUD green should hold the 880 target at BPM 140, got "${green140}"`);
+    await page.waitForTimeout(28000); // past the STOP into the 175 section
+    const green175 = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.green ?? '');
+    if (green175 !== '880')
+      throw new Error(`HUD green should hold 880 through the BPM change, got "${green175}"`);
+    await page.screenshot({ path: SHOT('12b-green-lock-play') });
+    // In-play PageUp adjusts the TARGET under lock (faster = −10ms), not hi-speed.
+    await page.keyboard.press('PageUp');
+    await page.waitForFunction(
+      () => document.querySelector('[data-screen="PLAY"]')?.dataset?.green === '870',
+      { timeout: 5000 },
+    );
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.result-status', { timeout: 8000 });
+    const doc = await page.evaluate(() => localStorage.getItem('playOptions.v1'));
+    console.log(`  playOptions.v1: ${doc}`);
+    if (!doc.includes('"greenLockEnabled":true')) throw new Error('lock ON not persisted');
+    if (!doc.includes('"greenLockTargetMs":870'))
+      throw new Error('in-play target adjustment not persisted');
+    // Manual hi-speed must survive locked play untouched (PageUp adjusted the target).
+    if (!doc.includes('"hiSpeed":1.75')) throw new Error('manual hi-speed should be untouched');
+    await page.keyboard.press('Escape'); // back to select
+    await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
+    await page.keyboard.press('Escape'); // collapse
+    bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('G-LOCK 870ms'))
+      throw new Error(`select bar should show the adjusted target: ${bar}`);
+    await page.keyboard.press('KeyL'); // lock OFF for the steps that follow
+    bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('G-LOCK OFF') || !bar.includes('HI-SPEED 1.75'))
+      throw new Error(`toggling off should restore manual hi-speed display: ${bar}`);
+    const doc2 = await page.evaluate(() => localStorage.getItem('playOptions.v1'));
+    if (!doc2.includes('"greenLockEnabled":false')) throw new Error('lock OFF not persisted');
+  },
+);
+
 // Lazy-load + play smoke for the OTHER built-in songs: exercises per-song chart/
 // audio fetch on demand and the renderer against the multi-BPM chart (Neon
 // Cascade, 140->175->140 + STOP) and the densest chart (Overdrive Core ANOTHER,

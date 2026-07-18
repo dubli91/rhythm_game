@@ -11,13 +11,16 @@ import type { ClearLamp } from '../features/play/gauge';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, isValidKeyMap } from '../features/play/input';
 import {
   ARRANGEMENTS,
+  GREEN_TARGET_DEFAULT,
   HI_SPEED_MAX,
   HI_SPEED_MIN,
   HI_SPEED_STEP,
+  clampGreenTarget,
   nextArrangement,
   stepCover,
+  stepGreenTarget,
 } from '../features/play/options';
-import { greenNumberFor } from '../features/play/render';
+import { greenNumberFor, lockedHiSpeedFor } from '../features/play/render';
 import { type SongAudioContextLike, createSongPlayer } from '../features/play/songPlayer';
 import { type Arrangement, GAUGE_TYPES, type GaugeType } from '../features/play/types';
 import { startPracticeSession } from '../features/practice/controller';
@@ -71,6 +74,10 @@ interface PlayOptionsDoc {
   suddenPlusEnabled: boolean;
   /** 0..80 (%) */
   suddenPlusCover: number;
+  /** Green-number lock / floating hi-speed (play-options.md MUST 15-17). */
+  greenLockEnabled: boolean;
+  /** 200..2000ms, 10ms steps. */
+  greenLockTargetMs: number;
 }
 
 // The settings.v1 doc shape is owned by the settings feature (single source of
@@ -222,6 +229,8 @@ function defaultPlayOptions(): PlayOptionsDoc {
     arrangement: 'OFF',
     suddenPlusEnabled: false,
     suddenPlusCover: 30,
+    greenLockEnabled: false,
+    greenLockTargetMs: GREEN_TARGET_DEFAULT,
   };
 }
 
@@ -261,6 +270,15 @@ function isPlayOptionsDoc(data: unknown): data is PlayOptionsDoc {
   if (
     doc.suddenPlusCover !== undefined &&
     !(typeof doc.suddenPlusCover === 'number' && Number.isFinite(doc.suddenPlusCover))
+  ) {
+    return false;
+  }
+  if (doc.greenLockEnabled !== undefined && typeof doc.greenLockEnabled !== 'boolean') {
+    return false;
+  }
+  if (
+    doc.greenLockTargetMs !== undefined &&
+    !(typeof doc.greenLockTargetMs === 'number' && Number.isFinite(doc.greenLockTargetMs))
   ) {
     return false;
   }
@@ -333,6 +351,8 @@ export function bootShell(root: HTMLElement): void {
   });
   // Spread over defaults fills fields added after the doc was stored (see validator).
   const playOptions: PlayOptionsDoc = { ...defaultPlayOptions(), ...playOptionsDoc.read() };
+  // The validator is type-only; a hand-edited target still lands on the 10ms grid.
+  playOptions.greenLockTargetMs = clampGreenTarget(playOptions.greenLockTargetMs);
   // `settings` is the ONE live settings object: the settings screen mutates it in
   // place and sessions read it at start, so a change applies to the very next play
   // with no refresh (settings-screen.md MUST 11). Normalize once at boot — the
@@ -466,16 +486,17 @@ export function bootShell(root: HTMLElement): void {
   const gaugeOpt = el('span');
   const hiSpeedOpt = el('span');
   const greenOpt = el('span');
+  const glockOpt = el('span');
   const arrangeOpt = el('span');
   const suddenOpt = el('span');
   const autoplayOpt = el('span');
-  optionsBar.append(gaugeOpt, hiSpeedOpt, greenOpt, arrangeOpt, suddenOpt, autoplayOpt);
+  optionsBar.append(gaugeOpt, hiSpeedOpt, greenOpt, glockOpt, arrangeOpt, suddenOpt, autoplayOpt);
   selectEl.appendChild(optionsBar);
   selectEl.appendChild(
     el(
       'div',
       'hint',
-      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · F folders · / search · G gauge · ←/→ hi-speed · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · P practice · O settings · keys: LShift S D F Space J K L',
+      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · F folders · / search · G gauge · ←/→ hi-speed · L g-lock · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · P practice · O settings · keys: LShift S D F Space J K L',
     ),
   );
 
@@ -551,21 +572,30 @@ export function bootShell(root: HTMLElement): void {
 
   function renderOptionsBar(): void {
     gaugeOpt.innerHTML = `GAUGE <b>${playOptions.gaugeType.replace('_', ' ')}</b>`;
-    hiSpeedOpt.innerHTML = `HI-SPEED <b>${playOptions.hiSpeed.toFixed(2)}</b>`;
     // Green number (play-options.md SHOULD 13). Reference BPM here is the
     // selected song's MAX BPM: the catalog only has a song-level range before
     // the chart JSON lazy-loads, and max keeps a soflan chart's fastest
     // section readable. The in-play HUD readout follows the live BPM instead.
     const row = selectModel?.rows().find((r) => r.selected);
     const refBpm = row !== undefined && row.kind !== 'folder' ? row.entry.bpm.max : null;
+    const cover = playOptions.suddenPlusEnabled ? playOptions.suddenPlusCover : 0;
+    // Green-number lock (play-options.md MUST 15/17): locked mode derives the
+    // hi-speed (shown as AUTO) and GREEN shows the ACTUAL value recomputed from
+    // the derived, clamped hi-speed — equal to the target unless the clamp bit.
+    const effHiSpeed =
+      playOptions.greenLockEnabled && refBpm !== null
+        ? lockedHiSpeedFor(refBpm, playOptions.greenLockTargetMs, cover)
+        : playOptions.hiSpeed;
+    hiSpeedOpt.innerHTML = playOptions.greenLockEnabled
+      ? `HI-SPEED <b>${refBpm === null ? 'AUTO' : `AUTO ${effHiSpeed.toFixed(2)}`}</b>`
+      : `HI-SPEED <b>${playOptions.hiSpeed.toFixed(2)}</b>`;
     greenOpt.innerHTML =
       refBpm === null
         ? 'GREEN <b>—</b>'
-        : `GREEN <b>${greenNumberFor(
-            refBpm,
-            playOptions.hiSpeed,
-            playOptions.suddenPlusEnabled ? playOptions.suddenPlusCover : 0,
-          )}</b>`;
+        : `GREEN <b>${greenNumberFor(refBpm, effHiSpeed, cover)}</b>`;
+    glockOpt.innerHTML = `G-LOCK <b>${
+      playOptions.greenLockEnabled ? `${playOptions.greenLockTargetMs}ms` : 'OFF'
+    }</b>`;
     arrangeOpt.innerHTML = `ARRANGE <b>${playOptions.arrangement}</b>`;
     suddenOpt.innerHTML = `SUDDEN+ <b>${
       playOptions.suddenPlusEnabled ? `${playOptions.suddenPlusCover}%` : 'OFF'
@@ -789,14 +819,16 @@ export function bootShell(root: HTMLElement): void {
         hiSpeed: playOptions.hiSpeed,
         suddenPlusEnabled: playOptions.suddenPlusEnabled,
         suddenPlusCover: playOptions.suddenPlusCover,
+        greenLockEnabled: playOptions.greenLockEnabled,
+        greenLockTargetMs: playOptions.greenLockTargetMs,
         onExit(outcome) {
           practiceBusy = false;
           // Hi-speed / SUDDEN+ behave exactly like song play, persistence included
-          // (practice-mode.md MUST 9, play-options.md MUST 4/8). No record is ever
-          // written for practice (acceptance criterion).
+          // (practice-mode.md MUST 9, play-options.md MUST 4/8; MUST 16 target).
           playOptions.hiSpeed = outcome.hiSpeed;
           playOptions.suddenPlusEnabled = outcome.suddenPlusEnabled;
           playOptions.suddenPlusCover = outcome.suddenPlusCover;
+          playOptions.greenLockTargetMs = outcome.greenLockTargetMs;
           savePlayOptions();
           renderOptionsBar();
           practicePlayEl.textContent = '';
@@ -867,13 +899,16 @@ export function bootShell(root: HTMLElement): void {
       arrangement: playOptions.arrangement,
       suddenPlusEnabled: playOptions.suddenPlusEnabled,
       suddenPlusCover: playOptions.suddenPlusCover,
+      greenLockEnabled: playOptions.greenLockEnabled,
+      greenLockTargetMs: playOptions.greenLockTargetMs,
       onFinished(result) {
         lastResult = result;
         // In-play PageUp/PageDown and SUDDEN+ adjustments persist to the next play,
-        // retries included (play-options.md MUST 4/8).
+        // retries included (play-options.md MUST 4/8; MUST 16 for the locked target).
         playOptions.hiSpeed = result.hiSpeed;
         playOptions.suddenPlusEnabled = result.suddenPlusEnabled;
         playOptions.suddenPlusCover = result.suddenPlusCover;
+        playOptions.greenLockTargetMs = result.greenLockTargetMs;
         savePlayOptions();
         renderOptionsBar();
         // recordPlay writes the record once per song end and skips (returns null)
@@ -1066,10 +1101,40 @@ export function bootShell(root: HTMLElement): void {
       } else if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
         event.preventDefault();
         const direction = event.code === 'ArrowRight' ? 1 : -1;
-        playOptions.hiSpeed = Math.min(
-          HI_SPEED_MAX,
-          Math.max(HI_SPEED_MIN, playOptions.hiSpeed + direction * HI_SPEED_STEP),
-        );
+        if (playOptions.greenLockEnabled) {
+          // Locked mode repurposes the hi-speed arrows for the target, mirroring
+          // in-play PageUp/PageDown (play-options.md MUST 16): → = faster =
+          // shorter visible time, so the target decreases.
+          playOptions.greenLockTargetMs = stepGreenTarget(
+            playOptions.greenLockTargetMs,
+            direction === 1 ? -1 : 1,
+          );
+        } else {
+          playOptions.hiSpeed = Math.min(
+            HI_SPEED_MAX,
+            Math.max(HI_SPEED_MIN, playOptions.hiSpeed + direction * HI_SPEED_STEP),
+          );
+        }
+        playMenuSfx('move');
+        renderOptionsBar();
+        savePlayOptions();
+      } else if (event.code === 'KeyL') {
+        // Green-number lock toggle (play-options.md MUST 15). Enabling seeds the
+        // target from the current manual green number so the scroll feel doesn't
+        // jump the moment the lock engages (decision recorded in the plan).
+        playOptions.greenLockEnabled = !playOptions.greenLockEnabled;
+        if (playOptions.greenLockEnabled) {
+          const row = selectModel.rows().find((r) => r.selected);
+          const refBpm = row !== undefined && row.kind !== 'folder' ? row.entry.bpm.max : null;
+          if (refBpm !== null) {
+            const manualGreen = greenNumberFor(
+              refBpm,
+              playOptions.hiSpeed,
+              playOptions.suddenPlusEnabled ? playOptions.suddenPlusCover : 0,
+            );
+            if (manualGreen > 0) playOptions.greenLockTargetMs = clampGreenTarget(manualGreen);
+          }
+        }
         playMenuSfx('move');
         renderOptionsBar();
         savePlayOptions();
