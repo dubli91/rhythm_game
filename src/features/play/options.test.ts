@@ -9,16 +9,19 @@ import {
   HI_SPEED_MIN,
   HI_SPEED_STEP,
   type ScrollGeometry,
+  TIMING_DISPLAY_MODES,
   clampCover,
   clampGreenTarget,
   greenNumberMs,
   hiSpeedForGreenTarget,
   nextArrangement,
+  nextTimingDisplay,
   stepCover,
   stepGreenTarget,
   stepHiSpeed,
+  timingDisplayLabel,
 } from './options';
-import { RENDER_LAYOUT, greenNumberFor, lockedHiSpeedFor } from './render';
+import { RENDER_LAYOUT, formatTimingIndicator, greenNumberFor, lockedHiSpeedFor } from './render';
 
 describe('stepHiSpeed', () => {
   it('steps by 0.25 in both directions', () => {
@@ -71,6 +74,44 @@ describe('nextArrangement', () => {
       seen.add(current);
     }
     expect(seen.size).toBe(ARRANGEMENTS.length);
+  });
+});
+
+describe('timing display mode (play-options.md MUST 18)', () => {
+  it('defaults to FAST_SLOW: the cycle order starts at the spec default', () => {
+    // Default ON — the JTBD is improvement, so the indicator ships enabled.
+    expect(TIMING_DISPLAY_MODES[0]).toBe('FAST_SLOW');
+  });
+
+  it('cycles FAST_SLOW → MS → OFF → FAST_SLOW', () => {
+    expect(nextTimingDisplay('FAST_SLOW')).toBe('MS');
+    expect(nextTimingDisplay('MS')).toBe('OFF');
+    expect(nextTimingDisplay('OFF')).toBe('FAST_SLOW');
+  });
+
+  it('covers every mode exactly once per full cycle', () => {
+    const seen = new Set([TIMING_DISPLAY_MODES[0]]);
+    let current = TIMING_DISPLAY_MODES[0] ?? 'FAST_SLOW';
+    for (let i = 0; i < TIMING_DISPLAY_MODES.length - 1; i++) {
+      current = nextTimingDisplay(current);
+      seen.add(current);
+    }
+    expect(seen.size).toBe(TIMING_DISPLAY_MODES.length);
+  });
+
+  it('labels every mode distinctly for the options bar', () => {
+    const labels = TIMING_DISPLAY_MODES.map(timingDisplayLabel);
+    expect(labels).toEqual(['FAST/SLOW', '±ms', 'OFF']);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe('formatTimingIndicator (playfield-rendering.md MUST 18)', () => {
+  it('FAST_SLOW mode renders the word; MS mode renders the signed integer δ', () => {
+    expect(formatTimingIndicator('FAST_SLOW', 'FAST', -20)).toBe('FAST');
+    expect(formatTimingIndicator('FAST_SLOW', 'SLOW', 20)).toBe('SLOW');
+    expect(formatTimingIndicator('MS', 'FAST', -13.4)).toBe('-13ms');
+    expect(formatTimingIndicator('MS', 'SLOW', 27.6)).toBe('+28ms');
   });
 });
 

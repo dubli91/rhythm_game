@@ -13,7 +13,13 @@
 import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import type { Chart, Note } from '../../lib/chart/types';
 import { type ScrollGeometry, greenNumberMs, hiSpeedForGreenTarget } from './options';
-import type { GaugeType, JudgementGrade, JudgementKind } from './types';
+import type {
+  GaugeType,
+  JudgementGrade,
+  JudgementKind,
+  TimingClass,
+  TimingDisplayMode,
+} from './types';
 
 export interface PlayRenderInit {
   /** Renderer appends its canvas here and removes it on destroy. */
@@ -24,6 +30,10 @@ export interface PlayRenderInit {
    *  gauge (practice-mode.md MUST 7) but reuses this renderer so play feel is
    *  identical. Defaults to 'song'. */
   hud?: 'song' | 'practice';
+  /** FAST/SLOW indicator mode (playfield-rendering.md MUST 18). Fixed per session
+   *  (play-options.md MUST 18: select-panel only, no in-play key), so it's an init
+   *  option rather than a per-frame view field. Defaults to FAST_SLOW. */
+  timingDisplay?: TimingDisplayMode;
 }
 
 // Note display states, written by the controller each frame (parallel to chart.notes).
@@ -54,7 +64,15 @@ export interface PlayFrameView {
   gauge: { type: GaugeType; value: number; clearLine: number; isSurvival: boolean } | null;
   combo: number;
   exScore: number;
-  lastJudgement: { grade: JudgementGrade; kind: JudgementKind; atSongTimeMs: number } | null;
+  /** timing/deltaMs feed the FAST/SLOW indicator (MUST 18): null timing on the
+   *  latest judgement (PGREAT/missPoor/emptyPoor/cnBreak) clears the display. */
+  lastJudgement: {
+    grade: JudgementGrade;
+    kind: JudgementKind;
+    timing: TimingClass | null;
+    deltaMs: number | null;
+    atSongTimeMs: number;
+  } | null;
   /** Judgement explosions (spec MUST 17): per-lane song time of the last
    *  PGREAT/GREAT hit (CN heads included; autoplay too), −Infinity when none.
    *  Length 8; the controller only ever overwrites entries — the renderer hides
@@ -113,6 +131,9 @@ export const RENDER_LAYOUT = {
 
   JUDGEMENT_TEXT_Y: 360,
   COMBO_TEXT_Y: 300,
+  // FAST/SLOW indicator (MUST 18): fixed spot just below the judgement text —
+  // adjacent but clear of both it (fontSize 40 @360) and the option flash (622).
+  TIMING_TEXT_Y: 402,
   JUDGEMENT_HOLD_MS: 500,
   PGREAT_FLASH_MS: 50,
 
@@ -199,6 +220,27 @@ const GRADE_GOOD = 0x4ad2ff;
 const GRADE_BAD = 0xb066ff;
 const GRADE_POOR = 0xff4455;
 
+// FAST/SLOW indicator colors (MUST 18, IIDX convention): FAST = blue (the even-key
+// swatch), SLOW = red (the POOR swatch) — both already established in this palette.
+const TIMING_FAST_COLOR = 0x3fa7ff;
+const TIMING_SLOW_COLOR = 0xff4455;
+
+/** Indicator string for a classified judgement (playfield-rendering.md MUST 18):
+ * the word in FAST_SLOW mode, the signed integer δ (e.g. '-13ms') in MS mode.
+ * Exported so the controllers' data-timing e2e mirror renders the exact same
+ * string as the canvas — single source for the format. */
+export function formatTimingIndicator(
+  mode: TimingDisplayMode,
+  timing: TimingClass,
+  deltaMs: number,
+): string {
+  if (mode === 'MS') {
+    const rounded = Math.round(deltaMs);
+    return `${rounded >= 0 ? '+' : ''}${rounded}ms`;
+  }
+  return timing;
+}
+
 function laneColor(lane: number): number {
   if (lane === 0) return COLOR_SCRATCH;
   return lane % 2 === 1 ? COLOR_KEY_ODD : COLOR_KEY_EVEN;
@@ -239,6 +281,7 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   const L = RENDER_LAYOUT;
   const { mount, chart, songTitle } = init;
   const hudMode = init.hud ?? 'song';
+  const timingMode = init.timingDisplay ?? 'FAST_SLOW';
   const notes: readonly Note[] = chart.notes;
   const lane = computeLaneGeometry();
   const playfieldRight =
@@ -535,6 +578,24 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   judgementText.visible = false;
   hudContainer.addChild(judgementText);
 
+  // FAST/SLOW timing indicator (spec MUST 18): one reused Text just below the
+  // judgement text, both HUD modes. Never shown when the mode is OFF.
+  const timingText = new Text({
+    text: '',
+    style: {
+      fill: 0xffffff,
+      fontFamily: 'Arial',
+      fontSize: 22,
+      fontWeight: 'bold',
+      align: 'center',
+    },
+  });
+  timingText.anchor.set(0.5);
+  timingText.x = playfieldCenterX;
+  timingText.y = L.TIMING_TEXT_Y;
+  timingText.visible = false;
+  hudContainer.addChild(timingText);
+
   // Brief option-change readout (play-options.md MUST 3): "HI-SPEED 2.25" etc.
   const optionFlash = new Text({
     text: '',
@@ -569,6 +630,11 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   let lastGaugePctShown = Number.NaN;
   let lastComboShown = -1;
   let lastGradeShown = '';
+  // Timing-indicator rebuild keys: the string/tint only change on a new classified
+  // judgement, so cache on (atSongTimeMs, deltaMs) — two numeric compares per frame,
+  // no string building (zero-allocation contract).
+  let lastTimingAtShown = Number.NaN;
+  let lastTimingDeltaShown: number | null = null;
   let lastClearLineShown = -1;
   let lastCoverShown = -1; // -1 = hidden
   let lastOptionFlashShown = '';
@@ -761,6 +827,28 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
       }
     } else {
       judgementText.visible = false;
+    }
+
+    // FAST/SLOW timing indicator (spec MUST 18): same lifetime window as the
+    // judgement text, replaced on the next judgement; an unclassified judgement
+    // (PGREAT/missPoor/emptyPoor/cnBreak) carries timing null, clearing it.
+    if (timingMode !== 'OFF') {
+      if (j !== null && j.timing !== null) {
+        const age = view.songTimeMs - j.atSongTimeMs;
+        if (age >= 0 && age < L.JUDGEMENT_HOLD_MS) {
+          if (lastTimingAtShown !== j.atSongTimeMs || lastTimingDeltaShown !== j.deltaMs) {
+            timingText.text = formatTimingIndicator(timingMode, j.timing, j.deltaMs ?? 0);
+            timingText.tint = j.timing === 'FAST' ? TIMING_FAST_COLOR : TIMING_SLOW_COLOR;
+            lastTimingAtShown = j.atSongTimeMs;
+            lastTimingDeltaShown = j.deltaMs;
+          }
+          timingText.visible = true;
+        } else {
+          timingText.visible = false;
+        }
+      } else {
+        timingText.visible = false;
+      }
     }
 
     // Combo, shown only when >= 2.

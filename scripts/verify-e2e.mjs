@@ -212,6 +212,10 @@ await step('abandon autoplay -> results shows EX gained + no-record note', async
   console.log(`  parsed EX: ${ex}`);
   if (!(ex > 0)) throw new Error(`autoplay EX score should be > 0, got ${ex}`);
   if (grid.includes('PGREAT0')) throw new Error('autoplay produced zero PGREATs');
+  // All-PGREAT perfect play is never FAST/SLOW-classified (judgement-scoring
+  // acceptance: autoplay counts are always 0), yet the rows must still render.
+  if (!grid.includes('FAST0SLOW0'))
+    throw new Error(`autoplay FAST/SLOW counts should both read 0: ${grid}`);
   await page.screenshot({ path: SHOT('7-results-autoplay') });
 });
 
@@ -479,6 +483,164 @@ await step(
   },
 );
 
+// --- FAST/SLOW timing indicator (judgement-scoring MUST 14-16, play-options
+// MUST 18, playfield-rendering MUST 18, results-records MUST 13) ---
+
+await step(
+  'timing display: default FAST/SLOW, KeyT cycles, persisted (play-options MUST 18)',
+  async () => {
+    let bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('TIMING FAST/SLOW'))
+      throw new Error(`TIMING should default to FAST/SLOW: ${bar}`);
+    await page.keyboard.press('KeyT');
+    bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('TIMING ±ms')) throw new Error(`KeyT should cycle to ±ms: ${bar}`);
+    await page.keyboard.press('KeyT');
+    bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('TIMING OFF')) throw new Error(`KeyT should cycle to OFF: ${bar}`);
+    const doc = await page.evaluate(() => localStorage.getItem('playOptions.v1'));
+    if (!doc.includes('"timingDisplay":"OFF"'))
+      throw new Error(`timing mode not persisted: ${doc}`);
+    await page.keyboard.press('KeyT'); // wrap back to the default
+    bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('TIMING FAST/SLOW'))
+      throw new Error(`cycle should wrap to FAST/SLOW: ${bar}`);
+    const doc2 = await page.evaluate(() => localStorage.getItem('playOptions.v1'));
+    if (!doc2.includes('"timingDisplay":"FAST_SLOW"'))
+      throw new Error(`wrapped mode not persisted: ${doc2}`);
+  },
+);
+
+// The canvas indicator mirrors to data-timing on the PLAY mount (same pattern as
+// data-green). It lives only 500ms per judgement, so poll-based reads race it —
+// a MutationObserver records every non-empty value it ever showed instead.
+const armTimingObserver = () =>
+  page.evaluate(() => {
+    const el = document.querySelector('[data-screen="PLAY"]');
+    window.__timingObs?.disconnect();
+    window.__timingSeen = [];
+    window.__timingObs = new MutationObserver(() => {
+      const v = el.dataset.timing ?? '';
+      if (v !== '' && !window.__timingSeen.includes(v)) window.__timingSeen.push(v);
+    });
+    window.__timingObs.observe(el, { attributes: true, attributeFilter: ['data-timing'] });
+  });
+const timingSeen = () => page.evaluate(() => window.__timingSeen ?? []);
+// Round-robin over every lane: a full cycle (~8 presses) is shorter than a note's
+// ±250ms window, so any note that scrolls by is consumed by SOME press — and a
+// mash-timed consuming press is essentially never PGREAT, so it classifies.
+const mashAllLanes = async (seconds) => {
+  const codes = ['KeyS', 'KeyD', 'KeyF', 'Space', 'KeyJ', 'KeyK', 'KeyL', 'ShiftLeft'];
+  const until = Date.now() + seconds * 1000;
+  while (Date.now() < until) {
+    for (const code of codes) await page.keyboard.press(code);
+  }
+};
+const enterFirstLightPlay = async () => {
+  await navigateToSong('First Light');
+  await page.keyboard.press('Enter'); // expand
+  await page.waitForSelector('.song-list li.chart-row', { timeout: 5000 });
+  await page.keyboard.press('Enter'); // play NORMAL
+  await page.waitForSelector('.screen-play canvas', { timeout: 20000 });
+  await armTimingObserver();
+};
+const exitToCollapsedSelect = async () => {
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
+  await page.keyboard.press('Escape'); // collapse for the next navigateToSong
+};
+
+await step(
+  'FAST/SLOW mode: real hits display, empty POORs never do (rendering MUST 18)',
+  async () => {
+    await page.keyboard.press('KeyA'); // autoplay OFF — the indicator needs real input
+    const bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('AUTOPLAY OFF')) throw new Error(`autoplay should be OFF: ${bar}`);
+    await enterFirstLightPlay();
+    // Before beat 16 (6.4s + 1s lead-in) there are no notes: a press is an empty
+    // POOR, which is unclassified and must not display (MUST 18 clear rule).
+    await page.waitForTimeout(2500);
+    await page.keyboard.press('KeyS');
+    await page.waitForTimeout(300);
+    const idle = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.timing ?? '');
+    if (idle !== '') throw new Error(`empty POOR must not display timing, got "${idle}"`);
+    if ((await timingSeen()).length !== 0)
+      throw new Error('no classified judgement yet, but the indicator fired');
+    // Mash across the first note section: consumed notes yield FAST/SLOW words.
+    await page.waitForTimeout(4500);
+    await mashAllLanes(4);
+    const seen = await timingSeen();
+    console.log(`  indicator values seen: ${JSON.stringify(seen)}`);
+    if (!seen.some((v) => v === 'FAST' || v === 'SLOW'))
+      throw new Error(`expected FAST/SLOW to display during mash, saw ${JSON.stringify(seen)}`);
+    if (!seen.every((v) => v === 'FAST' || v === 'SLOW'))
+      throw new Error(`FAST/SLOW mode must only show the words, saw ${JSON.stringify(seen)}`);
+    await page.screenshot({ path: SHOT('12c-timing-fastslow') });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.result-status', { timeout: 8000 });
+    const grid = await page.$eval('.result-grid', (n) => n.textContent);
+    console.log(`  grid: ${grid}`);
+    const m = grid.match(/FAST(\d+)SLOW(\d+)/);
+    if (!m) throw new Error(`results grid missing FAST/SLOW rows: ${grid}`);
+    if (!(Number(m[1]) + Number(m[2]) > 0))
+      throw new Error(`mash play should classify at least one hit: ${grid}`);
+    await page.keyboard.press('Escape');
+    await exitToCollapsedSelect();
+  },
+);
+
+await step('±ms mode: indicator shows the signed δ integer (rendering MUST 18)', async () => {
+  await page.keyboard.press('KeyT'); // FAST/SLOW -> ±ms
+  const bar = await page.$eval('.options-bar', (n) => n.textContent);
+  if (!bar.includes('TIMING ±ms')) throw new Error(`mode should read ±ms: ${bar}`);
+  await enterFirstLightPlay();
+  await page.waitForTimeout(7000); // reach the first notes
+  await mashAllLanes(4);
+  const seen = await timingSeen();
+  console.log(`  indicator values seen: ${JSON.stringify(seen)}`);
+  if (!seen.some((v) => /^[+-]\d+ms$/.test(v)))
+    throw new Error(`expected signed ms values, saw ${JSON.stringify(seen)}`);
+  if (!seen.every((v) => /^[+-]\d+ms$/.test(v)))
+    throw new Error(`±ms mode must only show δ values, saw ${JSON.stringify(seen)}`);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.result-status', { timeout: 8000 });
+  await page.keyboard.press('Escape');
+  await exitToCollapsedSelect();
+});
+
+await step(
+  'OFF mode: never displays, but still aggregates to results (results MUST 13)',
+  async () => {
+    await page.keyboard.press('KeyT'); // ±ms -> OFF
+    const bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('TIMING OFF')) throw new Error(`mode should read OFF: ${bar}`);
+    await enterFirstLightPlay();
+    await page.waitForTimeout(7000);
+    await mashAllLanes(4);
+    const seen = await timingSeen();
+    if (seen.length !== 0)
+      throw new Error(`OFF mode must never display, saw ${JSON.stringify(seen)}`);
+    const attr = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.timing ?? '');
+    if (attr !== '') throw new Error(`OFF mode left data-timing set: "${attr}"`);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.result-status', { timeout: 8000 });
+    const grid = await page.$eval('.result-grid', (n) => n.textContent);
+    console.log(`  grid: ${grid}`);
+    const m = grid.match(/FAST(\d+)SLOW(\d+)/);
+    if (!m) throw new Error(`OFF-mode results must still show FAST/SLOW rows: ${grid}`);
+    if (!(Number(m[1]) + Number(m[2]) > 0))
+      throw new Error(`OFF mode must still aggregate (MUST 16), got zeros: ${grid}`);
+    await page.screenshot({ path: SHOT('12d-timing-off-results') });
+    await page.keyboard.press('Escape');
+    await exitToCollapsedSelect();
+    await page.keyboard.press('KeyT'); // restore the FAST/SLOW default
+    await page.keyboard.press('KeyA'); // autoplay back ON for the play smokes below
+    const restored = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!restored.includes('TIMING FAST/SLOW') || !restored.includes('AUTOPLAY ON'))
+      throw new Error(`restore failed: ${restored}`);
+  },
+);
+
 // Lazy-load + play smoke for the OTHER built-in songs: exercises per-song chart/
 // audio fetch on demand and the renderer against the multi-BPM chart (Neon
 // Cascade, 140->175->140 + STOP) and the densest chart (Overdrive Core ANOTHER,
@@ -518,7 +680,7 @@ await step(
     // (head judgement, hold auto-complete, or renderer during the frozen scroll)
     // broke — a cnBreak would surface in the BP row.
     const grid = await playSmoke('Neon Cascade', 'NORMAL', 30);
-    if (!grid.includes('BAD0POOR (miss)0POOR (empty)0BP0'))
+    if (!grid.includes('BAD0POOR (miss)0POOR (empty)0FAST0SLOW0BP0'))
       throw new Error(`CN-chart autoplay produced non-clean counts: ${grid}`);
     await page.screenshot({ path: SHOT('9-neon-smoke') });
   },
@@ -696,7 +858,8 @@ await step(
     if (conflictRow !== 'lane-0')
       throw new Error(`secondary conflict should highlight lane-0: ${conflictRow}`);
     let status = await page.$eval('.settings-status', (n) => n.textContent);
-    if (!status.includes('SCRATCH')) throw new Error(`conflict notice should name SCRATCH: ${status}`);
+    if (!status.includes('SCRATCH'))
+      throw new Error(`conflict notice should name SCRATCH: ${status}`);
     await page.keyboard.press('PageDown'); // reserved code -> rejected, still capturing
     status = await page.$eval('.settings-status', (n) => n.textContent);
     if (!status.includes('reserved')) throw new Error(`reserved notice missing: ${status}`);

@@ -38,10 +38,12 @@ import {
   NOTE_CONSUMED,
   NOTE_MISSED,
   type PlayFrameView,
+  RENDER_LAYOUT,
   createPlayfieldRenderer,
+  formatTimingIndicator,
   lockedHiSpeedFor,
 } from './../play/render';
-import type { JudgementEvent } from './../play/types';
+import type { JudgementEvent, TimingDisplayMode } from './../play/types';
 import { MAX_PATTERN_BPM, MIN_PATTERN_BPM, type PracticePattern, sortNotes } from './pattern';
 import {
   LOOP_PREP_AHEAD_SEC,
@@ -97,6 +99,9 @@ export interface PracticeSessionOptions {
    *  play", practice-mode.md MUST 9 precedent). */
   greenLockEnabled?: boolean;
   greenLockTargetMs?: number;
+  /** FAST/SLOW indicator mode — practice shows the same indicator as song play
+   *  (playfield-rendering.md MUST 18 "연습 세션에서도 동일하게 동작"). */
+  timingDisplay?: TimingDisplayMode;
   onExit(outcome: PracticeOutcome): void;
 }
 
@@ -157,11 +162,13 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     notes: sessionNotes,
   };
 
+  const timingDisplay = opts.timingDisplay ?? 'FAST_SLOW';
   const renderer = await createPlayfieldRenderer({
     mount: opts.mount,
     chart: sessionChart,
     songTitle: `PRACTICE  ${opts.pattern.name}`,
     hud: 'practice',
+    timingDisplay,
   });
 
   const sources = opts.gameAudio.clockSources();
@@ -200,6 +207,7 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
   // Dev overlay: same shared toggle as song play (F1), per-session metrics.
   const devOverlay = createDevOverlay();
   let lastDevMirrored = '';
+  let lastTimingMirrored = '';
 
   function flashOption(text: string): void {
     optionFlashText = text;
@@ -236,7 +244,13 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
         noteStates[sessionIndex] = event.kind === 'missPoor' ? NOTE_MISSED : NOTE_CONSUMED;
       }
     }
-    lastJudgement = { grade: event.grade, kind: event.kind, atSongTimeMs: event.songTimeMs };
+    lastJudgement = {
+      grade: event.grade,
+      kind: event.kind,
+      timing: event.timing,
+      deltaMs: event.deltaMs,
+      atSongTimeMs: event.songTimeMs,
+    };
     // Explosion on PGREAT/GREAT hits (playfield-rendering.md MUST 17). Practice
     // patterns are tap-only, so kind === 'hit' is every scored press here.
     if (event.kind === 'hit' && (event.grade === 'PGREAT' || event.grade === 'GREAT')) {
@@ -365,6 +379,7 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     sfx.cancelAll(); // clicks are ≤60ms buffers — no fade path needed
     renderer.destroy();
     delete opts.mount.dataset.devOverlay;
+    delete opts.mount.dataset.timing;
     opts.onExit(buildOutcome(endedBy));
   }
 
@@ -480,6 +495,22 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     if (devText !== lastDevMirrored) {
       opts.mount.dataset.devOverlay = devText;
       lastDevMirrored = devText;
+    }
+    // FAST/SLOW indicator e2e mirror — same rule as song play's controller.
+    let timingMirror = '';
+    if (timingDisplay !== 'OFF' && lastJudgement !== null && lastJudgement.timing !== null) {
+      const jAge = t - lastJudgement.atSongTimeMs;
+      if (jAge >= 0 && jAge < RENDER_LAYOUT.JUDGEMENT_HOLD_MS) {
+        timingMirror = formatTimingIndicator(
+          timingDisplay,
+          lastJudgement.timing,
+          lastJudgement.deltaMs ?? 0,
+        );
+      }
+    }
+    if (timingMirror !== lastTimingMirrored) {
+      opts.mount.dataset.timing = timingMirror;
+      lastTimingMirrored = timingMirror;
     }
     renderer.update(view);
 

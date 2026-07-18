@@ -6,6 +6,7 @@
 // (a text sparkline) would make that visible.
 
 import { describe, expect, it } from 'vitest';
+import { timingClassFor } from '../play/judgement';
 import type { JudgementEvent } from '../play/types';
 import {
   DELTA_HISTOGRAM_BUCKETS,
@@ -16,15 +17,39 @@ import {
 } from './stats';
 
 function hit(deltaMs: number, grade: JudgementEvent['grade'] = 'PGREAT'): JudgementEvent {
-  return { kind: 'hit', grade, lane: 1, noteIndex: 0, deltaMs, songTimeMs: 1000 };
+  return {
+    kind: 'hit',
+    grade,
+    lane: 1,
+    noteIndex: 0,
+    deltaMs,
+    timing: timingClassFor(grade, deltaMs),
+    songTimeMs: 1000,
+  };
 }
 
 function missPoor(): JudgementEvent {
-  return { kind: 'missPoor', grade: 'POOR', lane: 1, noteIndex: 0, deltaMs: null, songTimeMs: 0 };
+  return {
+    kind: 'missPoor',
+    grade: 'POOR',
+    lane: 1,
+    noteIndex: 0,
+    deltaMs: null,
+    timing: null,
+    songTimeMs: 0,
+  };
 }
 
 function emptyPoor(): JudgementEvent {
-  return { kind: 'emptyPoor', grade: 'POOR', lane: 1, noteIndex: -1, deltaMs: null, songTimeMs: 0 };
+  return {
+    kind: 'emptyPoor',
+    grade: 'POOR',
+    lane: 1,
+    noteIndex: -1,
+    deltaMs: null,
+    timing: null,
+    songTimeMs: 0,
+  };
 }
 
 describe('createPracticeStats', () => {

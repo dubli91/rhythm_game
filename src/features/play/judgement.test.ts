@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_JUDGEMENT_WINDOWS_MS, type JudgeNote, createJudge } from './judgement';
+import {
+  DEFAULT_JUDGEMENT_WINDOWS_MS,
+  type JudgeNote,
+  createJudge,
+  timingClassFor,
+} from './judgement';
 
 describe('createJudge — judgement windows (spec acceptance)', () => {
   it('δ = ±16ms is PGREAT', () => {
@@ -315,5 +320,77 @@ describe('createJudge — custom windows', () => {
       1050,
     );
     expect(outside.kind).toBe('emptyPoor');
+  });
+});
+
+describe('createJudge — FAST/SLOW classification (judgement-scoring.md MUST 14/15)', () => {
+  it('δ = −20ms is GREAT + FAST, δ = +20ms is GREAT + SLOW (spec acceptance)', () => {
+    const notes: JudgeNote[] = [{ timeMs: 1000, lane: 1 }];
+    const early = createJudge(notes).onInput(1, 980);
+    expect(early.grade).toBe('GREAT');
+    expect(early.timing).toBe('FAST');
+    expect(early.deltaMs).toBe(-20);
+
+    const late = createJudge(notes).onInput(1, 1020);
+    expect(late.grade).toBe('GREAT');
+    expect(late.timing).toBe('SLOW');
+    expect(late.deltaMs).toBe(20);
+  });
+
+  it('classifies every non-PGREAT δ grade: GOOD and BAD both carry the sign', () => {
+    const notes: JudgeNote[] = [{ timeMs: 1000, lane: 1 }];
+    expect(createJudge(notes).onInput(1, 900).timing).toBe('FAST'); // GOOD
+    expect(createJudge(notes).onInput(1, 1100).timing).toBe('SLOW'); // GOOD
+    expect(createJudge(notes).onInput(1, 800).timing).toBe('FAST'); // BAD
+    expect(createJudge(notes).onInput(1, 1200).timing).toBe('SLOW'); // BAD
+  });
+
+  it('PGREAT is never classified, regardless of δ sign', () => {
+    const notes: JudgeNote[] = [{ timeMs: 1000, lane: 1 }];
+    const early = createJudge(notes).onInput(1, 984);
+    expect(early.grade).toBe('PGREAT');
+    expect(early.timing).toBeNull();
+    const late = createJudge(notes).onInput(1, 1016);
+    expect(late.grade).toBe('PGREAT');
+    expect(late.timing).toBeNull();
+  });
+
+  it('timingClassFor: δ 0 is neither, PGREAT is neither at any δ', () => {
+    expect(timingClassFor('GREAT', 0)).toBeNull();
+    expect(timingClassFor('PGREAT', -200)).toBeNull();
+    expect(timingClassFor('GOOD', -0.001)).toBe('FAST');
+    expect(timingClassFor('BAD', 0.001)).toBe('SLOW');
+  });
+
+  it('non-δ judgements are unclassified: missPoor, emptyPoor, cnBreak, cnComplete', () => {
+    const notes: JudgeNote[] = [{ timeMs: 1000, lane: 1 }];
+    const [miss] = createJudge(notes).advance(10_000);
+    expect(miss?.kind).toBe('missPoor');
+    expect(miss?.timing).toBeNull();
+
+    const empty = createJudge(notes).onInput(1, 5000);
+    expect(empty.kind).toBe('emptyPoor');
+    expect(empty.timing).toBeNull();
+
+    const cnNotes: JudgeNote[] = [{ timeMs: 1000, lane: 1, endTimeMs: 2000 }];
+    const breakJudge = createJudge(cnNotes);
+    breakJudge.onInput(1, 1000);
+    const broke = breakJudge.onRelease(1, 1200);
+    expect(broke?.kind).toBe('cnBreak');
+    expect(broke?.timing).toBeNull(); // "treated as BAD" but not δ-based (MUST 14)
+
+    const completeJudge = createJudge(cnNotes);
+    completeJudge.onInput(1, 1000);
+    const done = completeJudge.onRelease(1, 1950);
+    expect(done?.kind).toBe('cnComplete');
+    expect(done?.timing).toBeNull();
+  });
+
+  it('a CN head hit is classified exactly like a tap (MUST 14: CN 시작 판정 포함)', () => {
+    const notes: JudgeNote[] = [{ timeMs: 1000, lane: 1, endTimeMs: 2000 }];
+    const head = createJudge(notes).onInput(1, 975);
+    expect(head.kind).toBe('hit');
+    expect(head.grade).toBe('GREAT');
+    expect(head.timing).toBe('FAST');
   });
 });

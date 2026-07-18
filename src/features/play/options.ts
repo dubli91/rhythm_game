@@ -3,7 +3,7 @@
 // (controller.ts). Single source of truth for ranges/steps/cycle order so the
 // two surfaces can never drift apart.
 
-import type { Arrangement } from './types';
+import type { Arrangement, TimingDisplayMode } from './types';
 
 // Hi-speed multiplier (play-options.md MUST 1): 0.50–10.00 in 0.25 steps.
 // Every reachable value is an exact binary float, so repeated stepping never drifts.
@@ -27,6 +27,17 @@ export const GREEN_TARGET_DEFAULT = 1000;
 /** Options-panel cycle order (song-select.md MUST 6). */
 export const ARRANGEMENTS: readonly Arrangement[] = ['OFF', 'RANDOM', 'MIRROR'];
 
+/** Timing-display cycle order (play-options.md MUST 18). Starts at the default
+ * FAST_SLOW (default ON — the JTBD is improvement); select-panel only, no
+ * in-play key. Display-only: aggregation runs even at OFF. */
+export const TIMING_DISPLAY_MODES: readonly TimingDisplayMode[] = ['FAST_SLOW', 'MS', 'OFF'];
+
+const TIMING_DISPLAY_LABELS: Record<TimingDisplayMode, string> = {
+  FAST_SLOW: 'FAST/SLOW',
+  MS: '±ms',
+  OFF: 'OFF',
+};
+
 export function stepHiSpeed(value: number, direction: -1 | 1): number {
   const next = value + direction * HI_SPEED_STEP;
   return Math.min(HI_SPEED_MAX, Math.max(HI_SPEED_MIN, next));
@@ -43,6 +54,16 @@ export function clampCover(value: number): number {
 export function nextArrangement(current: Arrangement): Arrangement {
   const index = ARRANGEMENTS.indexOf(current);
   return ARRANGEMENTS[(index + 1) % ARRANGEMENTS.length] ?? 'OFF';
+}
+
+export function nextTimingDisplay(current: TimingDisplayMode): TimingDisplayMode {
+  const index = TIMING_DISPLAY_MODES.indexOf(current);
+  return TIMING_DISPLAY_MODES[(index + 1) % TIMING_DISPLAY_MODES.length] ?? 'FAST_SLOW';
+}
+
+/** Options-bar label for a timing display mode (single source, shared with e2e). */
+export function timingDisplayLabel(mode: TimingDisplayMode): string {
+  return TIMING_DISPLAY_LABELS[mode];
 }
 
 /** Snap to the 10ms grid, then clamp to 200–2000 (play-options.md MUST 16). */

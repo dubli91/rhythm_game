@@ -15,14 +15,22 @@ import {
   HI_SPEED_MAX,
   HI_SPEED_MIN,
   HI_SPEED_STEP,
+  TIMING_DISPLAY_MODES,
   clampGreenTarget,
   nextArrangement,
+  nextTimingDisplay,
   stepCover,
   stepGreenTarget,
+  timingDisplayLabel,
 } from '../features/play/options';
 import { greenNumberFor, lockedHiSpeedFor } from '../features/play/render';
 import { type SongAudioContextLike, createSongPlayer } from '../features/play/songPlayer';
-import { type Arrangement, GAUGE_TYPES, type GaugeType } from '../features/play/types';
+import {
+  type Arrangement,
+  GAUGE_TYPES,
+  type GaugeType,
+  type TimingDisplayMode,
+} from '../features/play/types';
 import { startPracticeSession } from '../features/practice/controller';
 import { type PracticeEditor, createPracticeEditor } from '../features/practice/editor';
 import type { PracticePattern } from '../features/practice/pattern';
@@ -78,6 +86,8 @@ interface PlayOptionsDoc {
   greenLockEnabled: boolean;
   /** 200..2000ms, 10ms steps. */
   greenLockTargetMs: number;
+  /** FAST/SLOW indicator mode (play-options.md MUST 18); display-only. */
+  timingDisplay: TimingDisplayMode;
 }
 
 // The settings.v1 doc shape is owned by the settings feature (single source of
@@ -231,6 +241,8 @@ function defaultPlayOptions(): PlayOptionsDoc {
     suddenPlusCover: 30,
     greenLockEnabled: false,
     greenLockTargetMs: GREEN_TARGET_DEFAULT,
+    // Default ON as FAST/SLOW (play-options.md MUST 18 — the JTBD is improvement).
+    timingDisplay: 'FAST_SLOW',
   };
 }
 
@@ -281,6 +293,15 @@ function isPlayOptionsDoc(data: unknown): data is PlayOptionsDoc {
   if (
     doc.greenLockTargetMs !== undefined &&
     !(typeof doc.greenLockTargetMs === 'number' && Number.isFinite(doc.greenLockTargetMs))
+  ) {
+    return false;
+  }
+  if (
+    doc.timingDisplay !== undefined &&
+    !(
+      typeof doc.timingDisplay === 'string' &&
+      (TIMING_DISPLAY_MODES as readonly string[]).includes(doc.timingDisplay)
+    )
   ) {
     return false;
   }
@@ -513,14 +534,24 @@ export function bootShell(root: HTMLElement): void {
   const glockOpt = el('span');
   const arrangeOpt = el('span');
   const suddenOpt = el('span');
+  const timingOpt = el('span');
   const autoplayOpt = el('span');
-  optionsBar.append(gaugeOpt, hiSpeedOpt, greenOpt, glockOpt, arrangeOpt, suddenOpt, autoplayOpt);
+  optionsBar.append(
+    gaugeOpt,
+    hiSpeedOpt,
+    greenOpt,
+    glockOpt,
+    arrangeOpt,
+    suddenOpt,
+    timingOpt,
+    autoplayOpt,
+  );
   selectEl.appendChild(optionsBar);
   selectEl.appendChild(
     el(
       'div',
       'hint',
-      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · F folders · / search · G gauge · ←/→ hi-speed · L g-lock · R arrange · Home sudden+ · PgUp/PgDn cover · A autoplay · P practice · O settings · keys: LShift S D F Space J K L',
+      '↑/↓ move · ENTER expand/play · ESC collapse · S sort · F folders · / search · G gauge · ←/→ hi-speed · L g-lock · R arrange · Home sudden+ · PgUp/PgDn cover · T timing · A autoplay · P practice · O settings · keys: LShift S D F Space J K L',
     ),
   );
 
@@ -624,6 +655,7 @@ export function bootShell(root: HTMLElement): void {
     suddenOpt.innerHTML = `SUDDEN+ <b>${
       playOptions.suddenPlusEnabled ? `${playOptions.suddenPlusCover}%` : 'OFF'
     }</b>`;
+    timingOpt.innerHTML = `TIMING <b>${timingDisplayLabel(playOptions.timingDisplay)}</b>`;
     autoplayOpt.innerHTML = `AUTOPLAY <b>${playOptions.autoplay ? 'ON (no record)' : 'OFF'}</b>`;
   }
 
@@ -845,6 +877,7 @@ export function bootShell(root: HTMLElement): void {
         suddenPlusCover: playOptions.suddenPlusCover,
         greenLockEnabled: playOptions.greenLockEnabled,
         greenLockTargetMs: playOptions.greenLockTargetMs,
+        timingDisplay: playOptions.timingDisplay,
         onExit(outcome) {
           practiceBusy = false;
           // Hi-speed / SUDDEN+ behave exactly like song play, persistence included
@@ -925,6 +958,7 @@ export function bootShell(root: HTMLElement): void {
       suddenPlusCover: playOptions.suddenPlusCover,
       greenLockEnabled: playOptions.greenLockEnabled,
       greenLockTargetMs: playOptions.greenLockTargetMs,
+      timingDisplay: playOptions.timingDisplay,
       onFinished(result) {
         lastResult = result;
         // In-play PageUp/PageDown and SUDDEN+ adjustments persist to the next play,
@@ -1049,6 +1083,10 @@ export function bootShell(root: HTMLElement): void {
     addRow('BAD', String(result.score.counts.BAD));
     addRow('POOR (miss)', String(result.score.counts.POOR));
     addRow('POOR (empty)', String(result.score.emptyPoorCount));
+    // FAST/SLOW counts (results-records.md MUST 13): always aggregated and shown,
+    // even when the display mode was OFF; never written into records.
+    addRow('FAST', String(result.score.fastCount));
+    addRow('SLOW', String(result.score.slowCount));
     addRow('BP', String(result.score.bp), { badge: outcome?.newMinBP === true });
     addRow('GAUGE', `${result.finalGauge.toFixed(1)}%`);
     addRow('FULL COMBO', result.score.fullCombo ? 'YES' : 'no');
@@ -1192,6 +1230,13 @@ export function bootShell(root: HTMLElement): void {
           renderOptionsBar();
           savePlayOptions();
         }
+      } else if (event.code === 'KeyT') {
+        // FAST/SLOW display mode (play-options.md MUST 18): select-panel only —
+        // there is deliberately no in-play key for it.
+        playOptions.timingDisplay = nextTimingDisplay(playOptions.timingDisplay);
+        playMenuSfx('move');
+        renderOptionsBar();
+        savePlayOptions();
       } else if (event.code === 'KeyA') {
         playOptions.autoplay = !playOptions.autoplay;
         playMenuSfx('move');

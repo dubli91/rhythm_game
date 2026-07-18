@@ -364,7 +364,9 @@ describe('scratch secondary slot (settings-screen.md MUST 15, input-handling.md 
   });
 
   it('clearScratchSecondary unbinds and persists; clearing an empty slot does not persist', () => {
-    const { model, values, onPersist } = makeModel(makeValues({ keyMapScratchSecondary: 'ShiftRight' }));
+    const { model, values, onPersist } = makeModel(
+      makeValues({ keyMapScratchSecondary: 'ShiftRight' }),
+    );
     model.clearScratchSecondary();
     expect(values.keyMapScratchSecondary).toBeNull();
     expect(onPersist).toHaveBeenCalledTimes(1);
@@ -373,7 +375,9 @@ describe('scratch secondary slot (settings-screen.md MUST 15, input-handling.md 
   });
 
   it('scratch per-lane reset clears the secondary slot too (MUST 15)', () => {
-    const { model, values, onPersist } = makeModel(makeValues({ keyMapScratchSecondary: 'ShiftRight' }));
+    const { model, values, onPersist } = makeModel(
+      makeValues({ keyMapScratchSecondary: 'ShiftRight' }),
+    );
     model.resetLane(0);
     expect(values.keyMapLanes[0]).toBe('ShiftLeft');
     expect(values.keyMapScratchSecondary).toBeNull();

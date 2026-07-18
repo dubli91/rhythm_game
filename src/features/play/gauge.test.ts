@@ -9,6 +9,9 @@ function ev(kind: JudgementKind, grade: JudgementGrade): JudgementEvent {
     lane: 1,
     noteIndex: kind === 'emptyPoor' ? -1 : 0,
     deltaMs: kind === 'hit' ? 0 : null,
+    // Gauge deltas never consult the FAST/SLOW classification (display/aggregation
+    // only — judgement-scoring.md MUST 15), so null here covers every case.
+    timing: null,
     songTimeMs: 0,
   };
 }

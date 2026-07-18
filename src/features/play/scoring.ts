@@ -16,6 +16,11 @@ export interface ScoreSummary {
   exScore: number;
   maxExScore: number;
   exPercent: number;
+  /** FAST/SLOW session counts (judgement-scoring.md MUST 16): non-PGREAT hits by
+   *  δ sign. Aggregated regardless of the timing display option; shown on results
+   *  (results-records.md MUST 13) but never persisted into records. */
+  fastCount: number;
+  slowCount: number;
   // BP = BAD + missPoor POOR + emptyPoor + cnBreak (empty poors count toward BP per IIDX).
   bp: number;
   djRank: DjRank;
@@ -62,6 +67,8 @@ export function createScorer(totalNotes: number): Scorer {
   const counts = emptyCounts();
   let emptyPoorCount = 0;
   let cnBreakCount = 0;
+  let fastCount = 0;
+  let slowCount = 0;
   let combo = 0;
   let maxCombo = 0;
   let judgedNotes = 0;
@@ -94,6 +101,11 @@ export function createScorer(totalNotes: number): Scorer {
     // kind === 'hit'
     counts[event.grade]++;
     judgedNotes++;
+    // FAST/SLOW aggregation (judgement-scoring.md MUST 16): the judge classified
+    // the hit; only hits ever carry a timing, so the non-hit kinds above are
+    // excluded by construction.
+    if (event.timing === 'FAST') fastCount++;
+    else if (event.timing === 'SLOW') slowCount++;
     if (event.grade === 'BAD') {
       combo = 0;
     } else {
@@ -115,6 +127,8 @@ export function createScorer(totalNotes: number): Scorer {
       counts: { ...counts },
       emptyPoorCount,
       cnBreakCount,
+      fastCount,
+      slowCount,
       combo,
       maxCombo,
       exScore,

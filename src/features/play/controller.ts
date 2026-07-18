@@ -22,14 +22,16 @@ import {
   NOTE_HELD,
   NOTE_MISSED,
   type PlayFrameView,
+  RENDER_LAYOUT,
   createPlayfieldRenderer,
+  formatTimingIndicator,
   greenNumberFor,
   lockedHiSpeedFor,
 } from './render';
 import { createScorer } from './scoring';
 import type { ScoreSummary } from './scoring';
 import { type SongAudioContextLike, createSongPlayer } from './songPlayer';
-import type { Arrangement, GaugeType, JudgementEvent } from './types';
+import type { Arrangement, GaugeType, JudgementEvent, TimingDisplayMode } from './types';
 
 export interface PlayResult {
   /** false when the player abandoned via Escape before the song ended. */
@@ -87,6 +89,10 @@ export interface PlaySessionOptions {
    *  it cannot be toggled mid-play, only the target adjusts. */
   greenLockEnabled?: boolean;
   greenLockTargetMs?: number;
+  /** FAST/SLOW indicator mode (play-options.md MUST 18): fixed per session
+   *  (select-panel only, no in-play key) and display-only — aggregation into
+   *  ScoreSummary.fastCount/slowCount runs even at OFF. Defaults to FAST_SLOW. */
+  timingDisplay?: TimingDisplayMode;
   onFinished(result: PlayResult): void;
 }
 
@@ -144,10 +150,12 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   const scorer = createScorer(totalNotes);
   const gauge = createGauge(opts.gaugeType, { total: chart.total, noteCount: totalNotes });
 
+  const timingDisplay = opts.timingDisplay ?? 'FAST_SLOW';
   const renderer = await createPlayfieldRenderer({
     mount: opts.mount,
     chart,
     songTitle: `${song.title} / ${song.artist}`,
+    timingDisplay,
   });
 
   const clock = createSongClock(opts.gameAudio.clockSources(), {
@@ -191,6 +199,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   const devOverlay = createDevOverlay();
   let lastDevMirrored = '';
   let lastGreenMirrored = '';
+  let lastTimingMirrored = '';
 
   function flashOption(text: string): void {
     optionFlashText = text;
@@ -233,7 +242,13 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     }
     // A completed hold is silent — the head's judgement text is the note's grade.
     if (event.kind !== 'cnComplete') {
-      lastJudgement = { grade: event.grade, kind: event.kind, atSongTimeMs: event.songTimeMs };
+      lastJudgement = {
+        grade: event.grade,
+        kind: event.kind,
+        timing: event.timing,
+        deltaMs: event.deltaMs,
+        atSongTimeMs: event.songTimeMs,
+      };
     }
     // Explosion on PGREAT/GREAT hits only (playfield-rendering.md MUST 17):
     // kind === 'hit' covers taps AND CN heads while excluding cnComplete, whose
@@ -314,6 +329,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     renderer.destroy();
     delete opts.mount.dataset.devOverlay;
     delete opts.mount.dataset.green;
+    delete opts.mount.dataset.timing;
   }
 
   function buildResult(endProgress: number, finishedSong: boolean): PlayResult {
@@ -450,6 +466,24 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     if (greenMirror !== lastGreenMirrored) {
       opts.mount.dataset.green = greenMirror;
       lastGreenMirrored = greenMirror;
+    }
+    // Mirror the FAST/SLOW indicator for e2e (playfield-rendering.md MUST 18) —
+    // same visibility rule as the renderer ('' = hidden): judgement-text lifetime,
+    // classified judgements only, nothing ever at OFF.
+    let timingMirror = '';
+    if (timingDisplay !== 'OFF' && lastJudgement !== null && lastJudgement.timing !== null) {
+      const jAge = t - lastJudgement.atSongTimeMs;
+      if (jAge >= 0 && jAge < RENDER_LAYOUT.JUDGEMENT_HOLD_MS) {
+        timingMirror = formatTimingIndicator(
+          timingDisplay,
+          lastJudgement.timing,
+          lastJudgement.deltaMs ?? 0,
+        );
+      }
+    }
+    if (timingMirror !== lastTimingMirrored) {
+      opts.mount.dataset.timing = timingMirror;
+      lastTimingMirrored = timingMirror;
     }
     renderer.update(view);
 

@@ -19,6 +19,11 @@ export type JudgementGrade = 'PGREAT' | 'GREAT' | 'GOOD' | 'BAD' | 'POOR';
  */
 export type JudgementKind = 'hit' | 'missPoor' | 'emptyPoor' | 'cnBreak' | 'cnComplete';
 
+/** δ-sign classification of a hit (judgement-scoring.md MUST 14): FAST = early input
+ * (δ < 0), SLOW = late (δ > 0). Only δ-based non-PGREAT judgements are classified —
+ * PGREAT and every non-hit kind (missPoor/emptyPoor/cnBreak/cnComplete) are neither. */
+export type TimingClass = 'FAST' | 'SLOW';
+
 export interface JudgementEvent {
   kind: JudgementKind;
   /** missPoor and emptyPoor always carry grade 'POOR'; cnBreak carries 'BAD';
@@ -30,6 +35,9 @@ export interface JudgementEvent {
   noteIndex: number;
   /** inputSongTimeMs − noteTimeMs; null when kind !== 'hit'. */
   deltaMs: number | null;
+  /** FAST/SLOW classification of a non-PGREAT hit (judgement-scoring.md MUST 15);
+   *  display + aggregation only — never feeds judgement/combo/gauge/score. */
+  timing: TimingClass | null;
   songTimeMs: number;
 }
 
@@ -52,3 +60,8 @@ export const DJ_RANKS: readonly DjRank[] = ['AAA', 'AA', 'A', 'B', 'C', 'D', 'E'
 /** Lane-arrangement play option (play-options.md MUST 9-10). Results/records have carried
  * the field since before gameplay support existed so record schemas never migrate. */
 export type Arrangement = 'OFF' | 'RANDOM' | 'MIRROR';
+
+/** Judgement-timing display option (play-options.md MUST 18): OFF, the FAST/SLOW
+ * word, or the signed δ in ms. Display-only — FAST/SLOW aggregation runs even at
+ * OFF (judgement-scoring.md MUST 16). Cycle order/labels live in options.ts. */
+export type TimingDisplayMode = 'OFF' | 'FAST_SLOW' | 'MS';

@@ -2,7 +2,7 @@
 // Headless: evaluates input timing against chart notes and yields JudgementEvent
 // records for downstream gauge/scoring/HUD consumers. No DOM, no rendering.
 
-import type { JudgementEvent, JudgementGrade } from './types';
+import type { JudgementEvent, JudgementGrade, TimingClass } from './types';
 
 export interface JudgementWindowsMs {
   pgreat: number;
@@ -77,6 +77,19 @@ function gradeForDelta(absDeltaMs: number, windows: JudgementWindowsMs): Judgeme
   return null;
 }
 
+/** FAST/SLOW classification of a δ-based judgement (judgement-scoring.md MUST 14):
+ * the sign of the same offset-adjusted δ that graded the hit. PGREAT is neither,
+ * regardless of δ; δ exactly 0 is neither (unreachable for non-PGREAT grades with
+ * any real window set, but the rule stays total). Single source of truth — the
+ * scorer and every display surface consume the event's `timing` field, never
+ * re-derive the sign themselves. */
+export function timingClassFor(grade: JudgementGrade, deltaMs: number): TimingClass | null {
+  if (grade === 'PGREAT') return null;
+  if (deltaMs < 0) return 'FAST';
+  if (deltaMs > 0) return 'SLOW';
+  return null;
+}
+
 export function createJudge(
   notes: readonly JudgeNote[],
   windows: JudgementWindowsMs = DEFAULT_JUDGEMENT_WINDOWS_MS,
@@ -135,6 +148,7 @@ export function createJudge(
             lane,
             noteIndex: entry.noteIndex,
             deltaMs,
+            timing: timingClassFor(grade, deltaMs),
             songTimeMs,
           };
         }
@@ -148,6 +162,7 @@ export function createJudge(
       lane,
       noteIndex: -1,
       deltaMs: null,
+      timing: null,
       songTimeMs,
     };
   }
@@ -160,12 +175,15 @@ export function createJudge(
     // edge is unreachable because advance() auto-completes held notes at endTimeMs.
     const success = songTimeMs >= hold.endTimeMs - windows.good - BOUNDARY_EPSILON_MS;
     states[hold.noteIndex] = success ? 'hit' : 'broken';
+    // CN tail events are not δ-based, so a cnBreak's BAD is never FAST/SLOW
+    // (judgement-scoring.md MUST 14 excludes it explicitly).
     return {
       kind: success ? 'cnComplete' : 'cnBreak',
       grade: success ? 'PGREAT' : 'BAD',
       lane,
       noteIndex: hold.noteIndex,
       deltaMs: null,
+      timing: null,
       songTimeMs,
     };
   }
@@ -192,6 +210,7 @@ export function createJudge(
             lane,
             noteIndex: entry.noteIndex,
             deltaMs: null,
+            timing: null,
             songTimeMs: entry.timeMs + windows.bad,
           });
           head++;
@@ -214,6 +233,7 @@ export function createJudge(
           lane,
           noteIndex: hold.noteIndex,
           deltaMs: null,
+          timing: null,
           songTimeMs: hold.endTimeMs,
         });
       }
