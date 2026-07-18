@@ -680,6 +680,54 @@ await step('capture Escape cancels without exiting the screen', async () => {
   if (active === null) throw new Error('Escape during capture must not leave the settings screen');
 });
 
+const secondaryValue = () =>
+  page.$eval('[data-row="lane-0"] .settings-value-secondary', (n) => n.textContent);
+
+await step(
+  'scratch secondary slot: capture/conflict/reserved/clear (input-handling MUST 12-14, settings MUST 15)',
+  async () => {
+    if (!(await secondaryValue()).includes('2ND: —'))
+      throw new Error(`empty secondary slot not shown: ${await secondaryValue()}`);
+    await page.keyboard.press('Insert'); // capture into the 2ND slot (focus is on SCRATCH)
+    if (!(await secondaryValue()).includes('PRESS A KEY'))
+      throw new Error('secondary capture indicator missing');
+    await page.keyboard.press('KeyZ'); // the scratch PRIMARY's current code -> conflict
+    const conflictRow = await page.$eval('.settings-row.conflict', (n) => n.dataset.row);
+    if (conflictRow !== 'lane-0')
+      throw new Error(`secondary conflict should highlight lane-0: ${conflictRow}`);
+    let status = await page.$eval('.settings-status', (n) => n.textContent);
+    if (!status.includes('SCRATCH')) throw new Error(`conflict notice should name SCRATCH: ${status}`);
+    await page.keyboard.press('PageDown'); // reserved code -> rejected, still capturing
+    status = await page.$eval('.settings-status', (n) => n.textContent);
+    if (!status.includes('reserved')) throw new Error(`reserved notice missing: ${status}`);
+    await page.keyboard.press('ShiftRight'); // fresh -> assigned
+    if (!(await secondaryValue()).includes('2ND: ShiftRight'))
+      throw new Error(`ShiftRight not assigned to the secondary: ${await secondaryValue()}`);
+    let doc = await settingsDoc();
+    if (doc.keyMapScratchSecondary !== 'ShiftRight')
+      throw new Error(`secondary not persisted: ${doc.keyMapScratchSecondary}`);
+    // Duplicate rule works in the other direction too: a PRIMARY capture must
+    // reject the code held by the secondary slot.
+    await page.keyboard.press('Enter'); // primary capture on SCRATCH
+    await page.keyboard.press('ShiftRight');
+    status = await page.$eval('.settings-status', (n) => n.textContent);
+    if (!status.includes('SCRATCH (2ND)'))
+      throw new Error(`primary capture should name the 2ND slot conflict: ${status}`);
+    await page.keyboard.press('Escape'); // cancel the capture
+    // Shift+Delete clears ONLY the secondary; primary stays KeyZ.
+    await page.keyboard.press('Shift+Delete');
+    if (!(await secondaryValue()).includes('2ND: —'))
+      throw new Error('Shift+Delete should clear the secondary slot');
+    doc = await settingsDoc();
+    if (doc.keyMapScratchSecondary !== null) throw new Error('cleared secondary not persisted');
+    if (doc.keyMapLanes[0] !== 'KeyZ') throw new Error('clearing 2ND must not touch the primary');
+    // Re-assign for the reload-persistence assertion below.
+    await page.keyboard.press('Insert');
+    await page.keyboard.press('ShiftRight');
+    await page.screenshot({ path: SHOT('17b-settings-secondary') });
+  },
+);
+
 await step('offset adjusts via arrows (fine + coarse) and persists', async () => {
   for (let i = 0; i < 9; i++) await page.keyboard.press('ArrowDown'); // to GLOBAL OFFSET row
   await page.keyboard.press('ArrowRight');
@@ -757,6 +805,8 @@ await step('settings persist across reload (acceptance criterion)', async () => 
   await page.waitForSelector('[data-screen="SETTINGS"].active', { timeout: 5000 });
   if (!(await settingsValue('lane-0')).includes('KeyZ'))
     throw new Error('rebound key lost on reload');
+  if (!(await secondaryValue()).includes('2ND: ShiftRight'))
+    throw new Error('scratch secondary lost on reload (input-handling MUST 12 acceptance)');
   const shownOffset = await settingsValue('offset');
   if (!shownOffset.includes(`${Math.abs(appliedOffset)}ms`))
     throw new Error(`offset lost on reload: ${shownOffset} vs ${appliedOffset}`);
@@ -764,14 +814,18 @@ await step('settings persist across reload (acceptance criterion)', async () => 
     throw new Error('music volume lost on reload');
 });
 
-await step('reset-all restores default key map', async () => {
+await step('reset-all restores default key map (secondary cleared too)', async () => {
   for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowDown'); // to ALL KEYS row
   await page.keyboard.press('Enter');
   if (!(await settingsValue('lane-0')).includes('ShiftLeft'))
     throw new Error('reset-all did not restore scratch default');
+  if (!(await secondaryValue()).includes('2ND: —'))
+    throw new Error('reset-all should clear the scratch secondary (MUST 12: default unbound)');
   const doc = await settingsDoc();
   if (doc.keyMapLanes.join(',') !== 'ShiftLeft,KeyS,KeyD,KeyF,Space,KeyJ,KeyK,KeyL')
     throw new Error(`reset-all not persisted: ${doc.keyMapLanes}`);
+  if (doc.keyMapScratchSecondary !== null)
+    throw new Error(`reset-all should persist a null secondary: ${doc.keyMapScratchSecondary}`);
 });
 
 await step('corrupt settings.v1 falls back to defaults without crashing', async () => {
@@ -789,6 +843,54 @@ await step('corrupt settings.v1 falls back to defaults without crashing', async 
   await page.waitForSelector('[data-screen="SONG_SELECT"].active', { timeout: 5000 });
   await page.screenshot({ path: SHOT('19-settings-defaults') });
 });
+
+await step(
+  'in-play: secondary scratch keydown fires while the primary is held (MUST 13 acceptance)',
+  async () => {
+    // Bind a secondary on the (post-corruption default) map, then play manually.
+    await page.keyboard.press('KeyO');
+    await page.waitForSelector('[data-screen="SETTINGS"].active', { timeout: 5000 });
+    await page.keyboard.press('Insert');
+    await page.keyboard.press('ShiftRight');
+    if (!(await secondaryValue()).includes('2ND: ShiftRight'))
+      throw new Error('secondary not bound for the in-play check');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[data-screen="SONG_SELECT"].active .song-list li.selected', {
+      timeout: 5000,
+    });
+    await page.keyboard.press('KeyA'); // autoplay OFF — real keys must judge
+    const bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('AUTOPLAY OFF')) throw new Error('autoplay should be OFF for manual input');
+    await navigateToSong('First Light');
+    await page.keyboard.press('Enter'); // expand
+    await page.waitForSelector('.song-list li.chart-row', { timeout: 5000 });
+    await page.keyboard.press('Enter'); // play
+    await page.waitForSelector('.screen-play canvas', { timeout: 20000 });
+    await page.keyboard.press('F1'); // dev overlay: AVG (n) counts real keydown samples
+    await page.waitForTimeout(800);
+    // Hold the primary, tap the secondary while it is held, then release both.
+    // Two independent keydowns ⇒ exactly two input-latency samples: the per-lane
+    // held-guard of the single-key design would have swallowed the second one.
+    await page.keyboard.down('ShiftLeft');
+    await page.waitForTimeout(120);
+    await page.keyboard.down('ShiftRight');
+    await page.waitForTimeout(120);
+    await page.keyboard.up('ShiftRight');
+    await page.keyboard.up('ShiftLeft');
+    await page.waitForFunction(
+      () => {
+        const text = document.querySelector('[data-screen="PLAY"]')?.dataset?.devOverlay ?? '';
+        return / \(2\)/.test(text);
+      },
+      { timeout: 5000 },
+    );
+    await page.keyboard.press('F1');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.result-status', { timeout: 8000 });
+    await page.keyboard.press('Escape'); // back to select
+    await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
+  },
+);
 
 console.log('--- console messages (last 25) ---');
 for (const m of consoleMsgs.slice(-25)) console.log(m);

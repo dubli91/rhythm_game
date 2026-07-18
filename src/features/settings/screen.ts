@@ -158,6 +158,8 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
   interface RowView {
     li: HTMLLIElement;
     value: HTMLSpanElement;
+    /** Scratch row only (settings-screen.md MUST 15): the 2ND slot readout. */
+    secondaryValue?: HTMLSpanElement;
     slider?: HTMLInputElement;
   }
   const rowViews: RowView[] = [];
@@ -249,6 +251,26 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
     }
 
     if (row.kind === 'lane') {
+      if (row.lane === 0) {
+        // Scratch secondary slot (settings-screen.md MUST 15): a second value
+        // span plus its own assign/clear controls on the SAME row — the row
+        // list layout is pinned by model.test.ts, so no extra row.
+        const secondaryValue = el('span', 'settings-value settings-value-secondary');
+        li.appendChild(secondaryValue);
+        view.secondaryValue = secondaryValue;
+        li.appendChild(
+          smallButton('2ND', () => {
+            model.setFocus(index);
+            model.beginSecondaryCapture();
+          }),
+        );
+        li.appendChild(
+          smallButton('×2ND', () => {
+            model.setFocus(index);
+            model.clearScratchSecondary();
+          }),
+        );
+      }
       li.appendChild(smallButton('RESET', () => model.resetLane(row.lane)));
     } else if (row.kind === 'resetAll') {
       li.appendChild(smallButton('RESET ALL TO DEFAULTS', () => model.resetAllLanes()));
@@ -317,7 +339,7 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
     el(
       'div',
       'hint',
-      '↑/↓ move · ENTER capture/apply · ←/→ adjust (+SHIFT ×10) · DEL reset key · ESC back to select',
+      '↑/↓ move · ENTER capture/apply · ←/→ adjust (+SHIFT ×10) · DEL reset key · INS scratch 2nd · SHIFT+DEL clear 2nd · ESC back to select',
     ),
   );
 
@@ -560,6 +582,7 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
     statusEl.textContent = model.notice() ?? '';
     const focusIndex = model.focusIndex();
     const capturing = model.capturingLane();
+    const capturingSlot = model.capturingSlot();
     const conflict = model.conflictLane();
     rows.forEach((row, index) => {
       const view = rowViews[index];
@@ -570,9 +593,16 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
         case 'lane': {
           const isCapturing = row.lane === capturing;
           view.li.classList.toggle('capturing', isCapturing);
-          view.value.textContent = isCapturing
+          const primaryCapturing = isCapturing && capturingSlot === 'primary';
+          view.value.textContent = primaryCapturing
             ? 'PRESS A KEY… (ESC cancels)'
             : (values.keyMapLanes[row.lane] ?? '');
+          if (view.secondaryValue !== undefined) {
+            const secondaryCapturing = isCapturing && capturingSlot === 'secondary';
+            view.secondaryValue.textContent = secondaryCapturing
+              ? '2ND: PRESS A KEY… (ESC cancels)'
+              : `2ND: ${values.keyMapScratchSecondary ?? '—'}`;
+          }
           break;
         }
         case 'offset':
@@ -590,7 +620,9 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
       }
     });
     // Section headers summarize current values (MUST 1).
-    summaries.keys.textContent = values.keyMapLanes.join(' ');
+    summaries.keys.textContent =
+      values.keyMapLanes.join(' ') +
+      (values.keyMapScratchSecondary !== null ? ` · 2ND ${values.keyMapScratchSecondary}` : '');
     summaries.offset.textContent = formatOffsetMs(values.globalOffsetMs);
     summaries.volume.textContent = `MASTER ${percent(values.volumes.master)} · MUSIC ${percent(values.volumes.music)} · FX ${percent(values.volumes.effects)}`;
     summaries.calibration.textContent = `${CALIBRATION_TAP_TARGET} taps`;
@@ -657,12 +689,31 @@ export function createSettingsScreen(opts: SettingsScreenOptions): SettingsScree
         performActivate();
         render();
         break;
+      case 'Insert': {
+        // Keyboard path to the secondary capture (MUST 15 + full keyboard
+        // operability, MUST 2); only meaningful on the scratch row.
+        const row = model.focusedRow();
+        if (row.kind === 'lane' && row.lane === 0) {
+          event.preventDefault();
+          opts.playMenuSfx?.('confirm');
+          model.beginSecondaryCapture();
+          render();
+        }
+        break;
+      }
       case 'Delete':
       case 'Backspace': {
         const row = model.focusedRow();
         if (row.kind === 'lane') {
           event.preventDefault();
-          model.resetLane(row.lane);
+          // Shift+Delete clears ONLY the secondary slot ("separate control",
+          // MUST 15); plain Delete stays the full per-lane reset (which also
+          // empties the secondary on scratch).
+          if (event.shiftKey && row.lane === 0) {
+            model.clearScratchSecondary();
+          } else {
+            model.resetLane(row.lane);
+          }
           render();
         }
         break;

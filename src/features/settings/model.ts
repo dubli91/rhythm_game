@@ -8,12 +8,15 @@
 // (SettingsValues), which is what makes "change offset, then play immediately"
 // work with no refresh (MUST 11): there is exactly one source of truth.
 //
-// Invariant: keyMapLanes is always a valid map (8 unique non-empty codes).
-// Every mutation path preserves it — duplicate assignments are rejected with
-// the conflicting lane (MUST 7), reserved in-play control codes are rejected
-// with a reason (MUST 10), and a per-lane reset is rejected when the default
-// code is currently bound to a DIFFERENT lane (otherwise the reset itself
-// would create a duplicate and silently invalidate the whole map).
+// Invariant: keyMapLanes + keyMapScratchSecondary is always a valid map (8
+// unique non-empty lane codes, plus an optional scratch secondary distinct from
+// all of them — input-handling.md MUST 12/14). Every mutation path preserves
+// it — duplicate assignments are rejected with the conflicting lane (MUST 7),
+// reserved in-play control codes are rejected with a reason (MUST 10), and a
+// per-lane reset is rejected when the default code is currently bound to a
+// DIFFERENT lane or to the scratch secondary (otherwise the reset itself would
+// create a duplicate and silently invalidate the whole map). Scratch reset
+// clears the secondary slot too (settings-screen.md MUST 15).
 
 import type { VolumeSettings } from '../../lib/audio/context';
 import { clampVolume } from '../../lib/audio/context';
@@ -25,6 +28,8 @@ export interface SettingsValues {
   globalOffsetMs: number;
   volumes: VolumeSettings;
   keyMapLanes: string[];
+  /** Optional scratch secondary key (input-handling.md MUST 12); null = unbound. */
+  keyMapScratchSecondary: string | null;
 }
 
 export type VolumeChannel = keyof VolumeSettings;
@@ -49,6 +54,11 @@ const LANE_NAMES = ['SCRATCH', 'KEY 1', 'KEY 2', 'KEY 3', 'KEY 4', 'KEY 5', 'KEY
 export function laneName(lane: number): string {
   return LANE_NAMES[lane] ?? `LANE ${lane}`;
 }
+
+/** Display name for the scratch secondary slot in notices/conflicts. */
+export const SCRATCH_SECONDARY_NAME = 'SCRATCH (2ND)';
+
+export type LaneSlot = 'primary' | 'secondary';
 
 export type CaptureOutcome =
   | { kind: 'assigned'; lane: number; code: string }
@@ -83,6 +93,9 @@ export interface SettingsModel {
   moveFocus(delta: number): void;
   /** Lane currently in key-capture mode, or null (MUST 6). */
   capturingLane(): number | null;
+  /** Which slot of the capturing lane, or null when not capturing. Only the
+   *  scratch lane ever captures 'secondary' (settings-screen.md MUST 15). */
+  capturingSlot(): LaneSlot | null;
   /** Lane to highlight after a duplicate-key rejection, or null (MUST 7). */
   conflictLane(): number | null;
   /** One-line status/rejection message for the screen, or null. */
@@ -97,6 +110,10 @@ export interface SettingsModel {
   /** A keydown while capturing. Escape cancels capture only (MUST 9/10). */
   captureKey(code: string): CaptureOutcome;
   cancelCapture(): void;
+  /** Enter capture mode for the scratch secondary slot (settings-screen.md MUST 15). */
+  beginSecondaryCapture(): void;
+  /** Unbind the scratch secondary (the slot may be empty — MUST 15). */
+  clearScratchSecondary(): void;
   resetLane(lane: number): void;
   resetAllLanes(): void;
   /** ←/→ on the focused row; returns whether the row is adjustable. */
@@ -135,12 +152,18 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
 
   let focus = 0;
   let capturing: number | null = null;
+  let capturingSecondary = false;
   let conflict: number | null = null;
   let notice: string | null = null;
 
   function clearFeedback(): void {
     conflict = null;
     notice = null;
+  }
+
+  function endCapture(): void {
+    capturing = null;
+    capturingSecondary = false;
   }
 
   function focusedRow(): SettingsRow {
@@ -150,7 +173,7 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
   }
 
   function setFocus(index: number): void {
-    capturing = null;
+    endCapture();
     clearFeedback();
     focus = Math.min(rows.length - 1, Math.max(0, index));
   }
@@ -192,9 +215,10 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
   function captureKey(code: string): CaptureOutcome {
     const lane = capturing;
     if (lane === null) return { kind: 'cancelled' };
+    const secondary = capturingSecondary;
     if (code === 'Escape') {
       // Escape cancels the capture only, with no rejection reason (MUST 9/10).
-      capturing = null;
+      endCapture();
       clearFeedback();
       return { kind: 'cancelled' };
     }
@@ -203,14 +227,37 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
       notice = `${code} is reserved for in-play controls and cannot be bound`;
       return { kind: 'rejected-reserved', code };
     }
+    // Duplicate rule spans the WHOLE map, secondary included — all codes must
+    // be mutually unique, max 9 (input-handling.md MUST 14).
     const existing = values.keyMapLanes.indexOf(code);
+    if (secondary) {
+      if (existing !== -1) {
+        conflict = existing;
+        notice = `${code} is already bound to ${laneName(existing)}`;
+        return { kind: 'rejected-conflict', code, conflictLane: existing };
+      }
+      // Re-pressing the current secondary code is an idempotent re-assign.
+      values.keyMapScratchSecondary = code;
+      endCapture();
+      clearFeedback();
+      notice = `${SCRATCH_SECONDARY_NAME} bound to ${code}`;
+      opts.onPersist();
+      return { kind: 'assigned', lane, code };
+    }
     if (existing !== -1 && existing !== lane) {
       conflict = existing;
       notice = `${code} is already bound to ${laneName(existing)}`;
       return { kind: 'rejected-conflict', code, conflictLane: existing };
     }
+    if (existing === -1 && code === values.keyMapScratchSecondary) {
+      // Conflicts with the secondary slot: highlight the scratch row (lane 0
+      // hosts both slots) and name the slot in the notice.
+      conflict = 0;
+      notice = `${code} is already bound to ${SCRATCH_SECONDARY_NAME}`;
+      return { kind: 'rejected-conflict', code, conflictLane: 0 };
+    }
     values.keyMapLanes[lane] = code;
-    capturing = null;
+    endCapture();
     clearFeedback();
     notice = `${laneName(lane)} bound to ${code}`;
     opts.onPersist();
@@ -219,8 +266,26 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
 
   function cancelCapture(): void {
     if (capturing === null) return;
-    capturing = null;
+    endCapture();
     clearFeedback();
+  }
+
+  function beginSecondaryCapture(): void {
+    clearFeedback();
+    capturing = 0;
+    capturingSecondary = true;
+  }
+
+  function clearScratchSecondary(): void {
+    endCapture();
+    clearFeedback();
+    if (values.keyMapScratchSecondary === null) {
+      notice = `${SCRATCH_SECONDARY_NAME} is not bound`;
+      return;
+    }
+    values.keyMapScratchSecondary = null;
+    notice = `${SCRATCH_SECONDARY_NAME} unbound`;
+    opts.onPersist();
   }
 
   function resetLane(lane: number): void {
@@ -232,15 +297,28 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
       notice = `cannot reset ${laneName(lane)}: ${defaultCode} is bound to ${laneName(existing)}`;
       return;
     }
+    // Scratch reset clears the secondary too (MUST 15), so its own default can
+    // never collide there; for other lanes the secondary is a real conflict.
+    if (lane !== 0 && defaultCode === values.keyMapScratchSecondary) {
+      conflict = 0;
+      notice = `cannot reset ${laneName(lane)}: ${defaultCode} is bound to ${SCRATCH_SECONDARY_NAME}`;
+      return;
+    }
     values.keyMapLanes[lane] = defaultCode;
+    if (lane === 0) values.keyMapScratchSecondary = null;
     clearFeedback();
-    notice = `${laneName(lane)} reset to ${defaultCode}`;
+    notice =
+      lane === 0
+        ? `${laneName(lane)} reset to ${defaultCode} (secondary cleared)`
+        : `${laneName(lane)} reset to ${defaultCode}`;
     opts.onPersist();
   }
 
   function resetAllLanes(): void {
     values.keyMapLanes.length = 0;
     values.keyMapLanes.push(...DEFAULT_KEY_MAP.lanes);
+    // Default mapping has no secondary bound (input-handling.md MUST 12).
+    values.keyMapScratchSecondary = null;
     clearFeedback();
     notice = 'all keys reset to defaults';
     opts.onPersist();
@@ -286,6 +364,7 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
     setFocus,
     moveFocus,
     capturingLane: () => capturing,
+    capturingSlot: () => (capturing === null ? null : capturingSecondary ? 'secondary' : 'primary'),
     conflictLane: () => conflict,
     notice: () => notice,
     setNotice: (message) => {
@@ -294,6 +373,8 @@ export function createSettingsModel(opts: SettingsModelOptions): SettingsModel {
     activate,
     captureKey,
     cancelCapture,
+    beginSecondaryCapture,
+    clearScratchSecondary,
     resetLane,
     resetAllLanes,
     adjustFocused,

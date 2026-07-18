@@ -11,13 +11,20 @@ export const LANE_COUNT_TOTAL = 8; // 0 = scratch, 1..7 = keys
 export interface LaneKeyMap {
   /** length 8; index = lane; values are KeyboardEvent.code. */
   lanes: readonly string[];
+  /** Optional second code for the scratch lane (lane 0) so alternating
+   *  two-finger scratching works (input-handling.md MUST 12). null/absent =
+   *  unbound; key lanes 1-7 stay single-code. */
+  scratchSecondary?: string | null;
 }
 
 export const DEFAULT_KEY_MAP: LaneKeyMap = {
   lanes: ['ShiftLeft', 'KeyS', 'KeyD', 'KeyF', 'Space', 'KeyJ', 'KeyK', 'KeyL'],
+  scratchSecondary: null,
 };
 
-/** Exactly 8 non-empty, unique codes. */
+/** Exactly 8 non-empty, unique lane codes; a bound scratch secondary must be
+ *  non-empty and distinct from every lane code too — ALL codes in the map are
+ *  mutually unique, max 9 (input-handling.md MUST 14). */
 export function isValidKeyMap(map: LaneKeyMap): boolean {
   if (map.lanes.length !== LANE_COUNT_TOTAL) {
     return false;
@@ -32,12 +39,26 @@ export function isValidKeyMap(map: LaneKeyMap): boolean {
     }
     seen.add(code);
   }
+  const secondary = map.scratchSecondary ?? null;
+  if (secondary !== null) {
+    if (secondary.length === 0) {
+      return false;
+    }
+    if (seen.has(secondary)) {
+      return false;
+    }
+  }
   return true;
 }
 
 export interface LaneKeyEvent {
   lane: number;
   down: boolean;
+  /** Whether ≥1 bound code for this lane remains physically held AFTER this
+   *  event — the key-beam signal (input-handling.md MUST 13): with a scratch
+   *  secondary bound, releasing one of two held keys keeps the beam lit.
+   *  Always true on down events. */
+  laneHeld: boolean;
   /** event.timeStamp verbatim. */
   timeStampMs: number;
 }
@@ -138,11 +159,30 @@ export function createPlayInput(target: KeyEventSource, options: PlayInputOption
   keyMap.lanes.forEach((code, lane) => {
     codeToLane.set(code, lane);
   });
+  // Scratch secondary (input-handling.md MUST 12): a second physical code
+  // feeding lane 0 as an equal, independent input.
+  const scratchSecondary = keyMap.scratchSecondary ?? null;
+  if (scratchSecondary !== null) {
+    codeToLane.set(scratchSecondary, 0);
+  }
 
   // Stable backing array — never reallocated, so heldLanes() can return the
   // same reference every call and the renderer can read it per frame with no
   // per-frame allocation.
   const held: boolean[] = new Array(LANE_COUNT_TOTAL).fill(false);
+  // Physical codes currently down. Per-CODE tracking is what makes each keydown
+  // of either scratch key an independent input (MUST 13) while `held` stays
+  // per-lane ("≥1 code down") for the beam rule.
+  const downCodes = new Set<string>();
+
+  function laneStillHeld(lane: number): boolean {
+    for (const [code, mapped] of codeToLane) {
+      if (mapped === lane && downCodes.has(code)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   let attached = false;
 
@@ -168,14 +208,16 @@ export function createPlayInput(target: KeyEventSource, options: PlayInputOption
 
     event.preventDefault();
 
-    // Belt-and-braces beyond the repeat flag: ignore a keydown for a lane
-    // that's already held.
-    if (held[lane] === true) {
+    // Belt-and-braces beyond the repeat flag: ignore a keydown for a CODE
+    // that's already down. Per-code (not per-lane) so the scratch secondary
+    // still fires while the primary is held (MUST 13).
+    if (downCodes.has(event.code)) {
       return;
     }
 
+    downCodes.add(event.code);
     held[lane] = true;
-    options.onLane({ lane, down: true, timeStampMs: event.timeStamp });
+    options.onLane({ lane, down: true, laneHeld: true, timeStampMs: event.timeStamp });
   }
 
   function handleKeyUp(event: KeyLikeEvent): void {
@@ -186,12 +228,14 @@ export function createPlayInput(target: KeyEventSource, options: PlayInputOption
 
     event.preventDefault();
 
-    if (held[lane] !== true) {
+    if (!downCodes.has(event.code)) {
       return;
     }
 
-    held[lane] = false;
-    options.onLane({ lane, down: false, timeStampMs: event.timeStamp });
+    downCodes.delete(event.code);
+    const stillHeld = laneStillHeld(lane);
+    held[lane] = stillHeld;
+    options.onLane({ lane, down: false, laneHeld: stillHeld, timeStampMs: event.timeStamp });
   }
 
   function attach(): void {
@@ -211,6 +255,7 @@ export function createPlayInput(target: KeyEventSource, options: PlayInputOption
     target.removeEventListener('keydown', handleKeyDown);
     target.removeEventListener('keyup', handleKeyUp);
     held.fill(false);
+    downCodes.clear();
   }
 
   function isHeld(lane: number): boolean {

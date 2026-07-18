@@ -260,7 +260,8 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     keyMap: opts.keyMap ?? DEFAULT_KEY_MAP,
     extraControlCodes: PRACTICE_CONTROL_CODES,
     onLane(e) {
-      heldLanes[e.lane] = e.down;
+      // "≥1 bound code held" beam rule (input-handling.md MUST 13).
+      heldLanes[e.lane] = e.laneHeld;
       if (!e.down || ending) return;
       const t = clock.eventTimeToSongTimeMs(e.timeStampMs);
       const loopIndex = routeLoopIndex(t);

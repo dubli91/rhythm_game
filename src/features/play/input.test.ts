@@ -83,6 +83,10 @@ describe('DEFAULT_KEY_MAP', () => {
       'KeyL',
     ]);
   });
+
+  it('binds no scratch secondary by default (input-handling.md MUST 12)', () => {
+    expect(DEFAULT_KEY_MAP.scratchSecondary).toBeNull();
+  });
 });
 
 describe('isValidKeyMap', () => {
@@ -109,6 +113,15 @@ describe('isValidKeyMap', () => {
       }),
     ).toBe(true);
   });
+
+  it('scratch secondary must be distinct from every lane code (MUST 14: 9 unique max)', () => {
+    expect(isValidKeyMap({ ...DEFAULT_KEY_MAP, scratchSecondary: 'ShiftRight' })).toBe(true);
+    expect(isValidKeyMap({ ...DEFAULT_KEY_MAP, scratchSecondary: 'ShiftLeft' })).toBe(false);
+    expect(isValidKeyMap({ ...DEFAULT_KEY_MAP, scratchSecondary: 'KeyK' })).toBe(false);
+    expect(isValidKeyMap({ ...DEFAULT_KEY_MAP, scratchSecondary: '' })).toBe(false);
+    expect(isValidKeyMap({ ...DEFAULT_KEY_MAP, scratchSecondary: null })).toBe(true);
+    expect(isValidKeyMap({ lanes: DEFAULT_KEY_MAP.lanes })).toBe(true); // absent field ok
+  });
 });
 
 describe('createPlayInput', () => {
@@ -121,7 +134,12 @@ describe('createPlayInput', () => {
       const event = makeEvent(code, { timeStamp: 1000 + lane });
       source.dispatch('keydown', event);
       expect(onLane).toHaveBeenCalledTimes(1);
-      expect(onLane).toHaveBeenCalledWith({ lane, down: true, timeStampMs: 1000 + lane });
+      expect(onLane).toHaveBeenCalledWith({
+        lane,
+        down: true,
+        laneHeld: true,
+        timeStampMs: 1000 + lane,
+      });
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
     });
   });
@@ -161,6 +179,7 @@ describe('createPlayInput', () => {
       expect(onLane).toHaveBeenLastCalledWith({
         lane,
         down: false,
+        laneHeld: false,
         timeStampMs: 3000 + lane,
       });
     });
@@ -338,7 +357,12 @@ describe('createPlayInput', () => {
     input.attach();
 
     source.dispatch('keydown', makeEvent('KeyA', { timeStamp: 5 }));
-    expect(onLane).toHaveBeenCalledExactlyOnceWith({ lane: 0, down: true, timeStampMs: 5 });
+    expect(onLane).toHaveBeenCalledExactlyOnceWith({
+      lane: 0,
+      down: true,
+      laneHeld: true,
+      timeStampMs: 5,
+    });
     expect(input.isHeld(0)).toBe(true);
 
     // Default-map code is unmapped under the custom map.
@@ -347,6 +371,90 @@ describe('createPlayInput', () => {
     source.dispatch('keydown', shiftEvent);
     expect(onLane).not.toHaveBeenCalled();
     expect(shiftEvent.preventDefault).not.toHaveBeenCalled();
+  });
+
+  describe('scratch secondary key (input-handling.md MUST 12-13)', () => {
+    const mapWithSecondary: LaneKeyMap = {
+      lanes: [...DEFAULT_KEY_MAP.lanes],
+      scratchSecondary: 'ShiftRight',
+    };
+
+    it('either code fires an independent lane-0 keydown, even while the other is held', () => {
+      const { source, onLane, input } = makeHarness(mapWithSecondary);
+      input.attach();
+
+      source.dispatch('keydown', makeEvent('ShiftLeft', { timeStamp: 10 }));
+      expect(onLane).toHaveBeenLastCalledWith({
+        lane: 0,
+        down: true,
+        laneHeld: true,
+        timeStampMs: 10,
+      });
+      // The secondary keydown is NOT swallowed by the held primary — each
+      // physical keydown is one scratch input (MUST 13, alternating fingers).
+      source.dispatch('keydown', makeEvent('ShiftRight', { timeStamp: 20 }));
+      expect(onLane).toHaveBeenCalledTimes(2);
+      expect(onLane).toHaveBeenLastCalledWith({
+        lane: 0,
+        down: true,
+        laneHeld: true,
+        timeStampMs: 20,
+      });
+      expect(input.isHeld(0)).toBe(true);
+    });
+
+    it('laneHeld stays true until the LAST of the two keys is released (beam rule)', () => {
+      const { source, onLane, input } = makeHarness(mapWithSecondary);
+      input.attach();
+
+      source.dispatch('keydown', makeEvent('ShiftLeft', { timeStamp: 1 }));
+      source.dispatch('keydown', makeEvent('ShiftRight', { timeStamp: 2 }));
+      onLane.mockClear();
+
+      source.dispatch('keyup', makeEvent('ShiftLeft', { timeStamp: 3 }));
+      expect(onLane).toHaveBeenLastCalledWith({
+        lane: 0,
+        down: false,
+        laneHeld: true, // secondary still down — beam stays lit
+        timeStampMs: 3,
+      });
+      expect(input.isHeld(0)).toBe(true);
+
+      source.dispatch('keyup', makeEvent('ShiftRight', { timeStamp: 4 }));
+      expect(onLane).toHaveBeenLastCalledWith({
+        lane: 0,
+        down: false,
+        laneHeld: false,
+        timeStampMs: 4,
+      });
+      expect(input.isHeld(0)).toBe(false);
+    });
+
+    it('rapid alternation delivers every keydown as its own input', () => {
+      const { source, onLane, input } = makeHarness(mapWithSecondary);
+      input.attach();
+
+      const downs = () =>
+        onLane.mock.calls.filter(([e]) => e.down && e.lane === 0).map(([e]) => e.timeStampMs);
+      for (let i = 0; i < 4; i++) {
+        const code = i % 2 === 0 ? 'ShiftLeft' : 'ShiftRight';
+        source.dispatch('keydown', makeEvent(code, { timeStamp: 100 + i * 2 }));
+        source.dispatch('keyup', makeEvent(code, { timeStamp: 101 + i * 2 }));
+      }
+      expect(downs()).toEqual([100, 102, 104, 106]);
+      expect(input.isHeld(0)).toBe(false);
+    });
+
+    it('detach clears per-code state so a re-attach starts clean', () => {
+      const { source, input } = makeHarness(mapWithSecondary);
+      input.attach();
+      source.dispatch('keydown', makeEvent('ShiftRight', { timeStamp: 1 }));
+      input.detach();
+      input.attach();
+      // Without the down-code cleared, this keyup would report laneHeld leftovers.
+      source.dispatch('keyup', makeEvent('ShiftRight', { timeStamp: 2 }));
+      expect(input.isHeld(0)).toBe(false);
+    });
   });
 
   it('heldLanes() returns the same stable array reference across calls', () => {

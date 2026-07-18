@@ -13,6 +13,7 @@ function makeValues(overrides: Partial<SettingsValues> = {}): SettingsValues {
     globalOffsetMs: 0,
     volumes: { master: 1, music: 1, effects: 1 },
     keyMapLanes: [...DEFAULT_KEY_MAP.lanes],
+    keyMapScratchSecondary: null,
     ...overrides,
   };
 }
@@ -303,6 +304,105 @@ describe('activate outcomes', () => {
     const { model } = makeModel();
     model.setFocus(ROW_EXPORT);
     expect(model.adjustFocused(1, false)).toBe(false);
+  });
+});
+
+describe('scratch secondary slot (settings-screen.md MUST 15, input-handling.md MUST 12/14)', () => {
+  it('captures a fresh code into the secondary slot and persists', () => {
+    const { model, values, onPersist } = makeModel();
+    model.beginSecondaryCapture();
+    expect(model.capturingLane()).toBe(0);
+    expect(model.capturingSlot()).toBe('secondary');
+    const outcome = model.captureKey('ShiftRight');
+    expect(outcome).toEqual({ kind: 'assigned', lane: 0, code: 'ShiftRight' });
+    expect(values.keyMapScratchSecondary).toBe('ShiftRight');
+    expect(values.keyMapLanes[0]).toBe('ShiftLeft'); // primary untouched
+    expect(model.capturingSlot()).toBeNull();
+    expect(onPersist).toHaveBeenCalledTimes(1);
+    expect(
+      isValidKeyMap({ lanes: values.keyMapLanes, scratchSecondary: values.keyMapScratchSecondary }),
+    ).toBe(true);
+  });
+
+  it('rejects a secondary code already bound to any lane (MUST 14: all 9 codes unique)', () => {
+    const { model, values, onPersist } = makeModel();
+    model.beginSecondaryCapture();
+    const primary = model.captureKey('ShiftLeft'); // scratch PRIMARY's own code
+    expect(primary).toEqual({ kind: 'rejected-conflict', code: 'ShiftLeft', conflictLane: 0 });
+    const other = model.captureKey('KeyS');
+    expect(other).toEqual({ kind: 'rejected-conflict', code: 'KeyS', conflictLane: 1 });
+    expect(model.capturingSlot()).toBe('secondary'); // still capturing — retry allowed
+    expect(values.keyMapScratchSecondary).toBeNull();
+    expect(onPersist).not.toHaveBeenCalled();
+  });
+
+  it('rejects reserved codes for the secondary slot exactly like a lane (MUST 10)', () => {
+    const { model, values } = makeModel();
+    model.beginSecondaryCapture();
+    expect(model.captureKey('PageUp')).toEqual({ kind: 'rejected-reserved', code: 'PageUp' });
+    expect(model.notice()).toContain('reserved');
+    expect(values.keyMapScratchSecondary).toBeNull();
+  });
+
+  it('a primary capture conflicts with the bound secondary (both directions of MUST 14)', () => {
+    const { model, values } = makeModel(makeValues({ keyMapScratchSecondary: 'ShiftRight' }));
+    model.setFocus(3);
+    model.activate();
+    const outcome = model.captureKey('ShiftRight');
+    expect(outcome).toEqual({ kind: 'rejected-conflict', code: 'ShiftRight', conflictLane: 0 });
+    expect(model.conflictLane()).toBe(0); // scratch row hosts the slot
+    expect(model.notice()).toContain('SCRATCH (2ND)');
+    expect(values.keyMapLanes[3]).toBe('KeyF');
+  });
+
+  it('Escape cancels a secondary capture without touching the slot', () => {
+    const { model, values } = makeModel(makeValues({ keyMapScratchSecondary: 'ShiftRight' }));
+    model.beginSecondaryCapture();
+    expect(model.captureKey('Escape')).toEqual({ kind: 'cancelled' });
+    expect(values.keyMapScratchSecondary).toBe('ShiftRight');
+    expect(model.capturingSlot()).toBeNull();
+  });
+
+  it('clearScratchSecondary unbinds and persists; clearing an empty slot does not persist', () => {
+    const { model, values, onPersist } = makeModel(makeValues({ keyMapScratchSecondary: 'ShiftRight' }));
+    model.clearScratchSecondary();
+    expect(values.keyMapScratchSecondary).toBeNull();
+    expect(onPersist).toHaveBeenCalledTimes(1);
+    model.clearScratchSecondary();
+    expect(onPersist).toHaveBeenCalledTimes(1); // no-op — nothing to unbind
+  });
+
+  it('scratch per-lane reset clears the secondary slot too (MUST 15)', () => {
+    const { model, values, onPersist } = makeModel(makeValues({ keyMapScratchSecondary: 'ShiftRight' }));
+    model.resetLane(0);
+    expect(values.keyMapLanes[0]).toBe('ShiftLeft');
+    expect(values.keyMapScratchSecondary).toBeNull();
+    expect(onPersist).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a key lane's reset when its default code is held by the secondary", () => {
+    const { model, values } = makeModel(makeValues({ keyMapScratchSecondary: 'KeyS' }));
+    // Lane 1's code was moved away so KeyS could live on the secondary.
+    values.keyMapLanes[1] = 'KeyX';
+    model.resetLane(1);
+    expect(values.keyMapLanes[1]).toBe('KeyX'); // unchanged
+    expect(model.conflictLane()).toBe(0);
+    expect(model.notice()).toContain('SCRATCH (2ND)');
+  });
+
+  it('reset-all clears the secondary (default map has none — MUST 12)', () => {
+    const { model, values } = makeModel(makeValues({ keyMapScratchSecondary: 'ShiftRight' }));
+    model.resetAllLanes();
+    expect(values.keyMapScratchSecondary).toBeNull();
+    expect(values.keyMapLanes).toEqual([...DEFAULT_KEY_MAP.lanes]);
+  });
+
+  it('setFocus cancels a secondary capture like a primary one', () => {
+    const { model } = makeModel();
+    model.beginSecondaryCapture();
+    model.setFocus(ROW_OFFSET);
+    expect(model.capturingLane()).toBeNull();
+    expect(model.capturingSlot()).toBeNull();
   });
 });
 

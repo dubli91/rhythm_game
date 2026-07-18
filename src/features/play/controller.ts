@@ -248,7 +248,9 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     keyMap: opts.keyMap ?? DEFAULT_KEY_MAP,
     onLane(e) {
       if (autoplay) return; // demo mode: player keys don't judge
-      heldLanes[e.lane] = e.down;
+      // Beam follows "≥1 bound code held" (input-handling.md MUST 13), so with a
+      // scratch secondary bound, releasing one of two held keys keeps it lit.
+      heldLanes[e.lane] = e.laneHeld;
       if (ending) return;
       const t = clock.eventTimeToSongTimeMs(e.timeStampMs);
       for (const miss of judge.advance(t)) dispatch(miss);
@@ -258,9 +260,12 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
         // event.timeStamp and performance.now() share a time base. Diagnostic
         // only — the judgement above already used the event time.
         devOverlay.recordInputLatency(performance.now() - e.timeStampMs);
-      } else {
+      } else if (!e.laneHeld) {
         // CN tail resolution (judgement-scoring.md SHOULD 12); null for the common
-        // keyup-after-a-tap case, which must stay free of penalties.
+        // keyup-after-a-tap case, which must stay free of penalties. A hold
+        // releases only when the LAST key leaves the lane — with a scratch
+        // secondary, tapping the other key must not break an active hold
+        // (the MUST 13 beam rule extended to the hold; decision in the plan).
         const release = judge.onRelease(e.lane, t);
         if (release !== null) dispatch(release);
       }

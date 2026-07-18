@@ -239,6 +239,8 @@ function defaultSettings(): SettingsDoc {
     globalOffsetMs: 0,
     volumes: { master: 1, music: 1, effects: 1 },
     keyMapLanes: [...DEFAULT_KEY_MAP.lanes],
+    // Default mapping binds no scratch secondary (input-handling.md MUST 12).
+    keyMapScratchSecondary: null,
   };
 }
 
@@ -312,7 +314,16 @@ function isSettingsDoc(data: unknown): data is SettingsDoc {
   ) {
     return false;
   }
-  return Array.isArray(doc.keyMapLanes) && doc.keyMapLanes.every((c) => typeof c === 'string');
+  if (!(Array.isArray(doc.keyMapLanes) && doc.keyMapLanes.every((c) => typeof c === 'string'))) {
+    return false;
+  }
+  // Newer field (scratch secondary, input-handling.md MUST 12): absent in older
+  // docs (normalized to null at boot), but mistyped-when-present is corruption.
+  return (
+    doc.keyMapScratchSecondary === undefined ||
+    doc.keyMapScratchSecondary === null ||
+    typeof doc.keyMapScratchSecondary === 'string'
+  );
 }
 
 export function bootShell(root: HTMLElement): void {
@@ -362,6 +373,16 @@ export function bootShell(root: HTMLElement): void {
   if (!isValidKeyMap({ lanes: settings.keyMapLanes })) {
     settings.keyMapLanes = [...DEFAULT_KEY_MAP.lanes];
   }
+  // Older docs lack the scratch secondary (input-handling.md MUST 12); a
+  // hand-edited one that collides with a lane code or is empty drops to null.
+  settings.keyMapScratchSecondary =
+    typeof settings.keyMapScratchSecondary === 'string' &&
+    isValidKeyMap({
+      lanes: settings.keyMapLanes,
+      scratchSecondary: settings.keyMapScratchSecondary,
+    })
+      ? settings.keyMapScratchSecondary
+      : null;
   settings.globalOffsetMs = clampGlobalOffsetMs(Math.round(settings.globalOffsetMs));
   settings.volumes = {
     master: clampVolume(settings.volumes.master),
@@ -370,7 +391,10 @@ export function bootShell(root: HTMLElement): void {
   };
   /** Read fresh at each session start so settings-screen rebinds apply immediately. */
   function currentKeyMap(): LaneKeyMap {
-    const map = { lanes: settings.keyMapLanes };
+    const map = {
+      lanes: settings.keyMapLanes,
+      scratchSecondary: settings.keyMapScratchSecondary,
+    };
     return isValidKeyMap(map) ? map : DEFAULT_KEY_MAP;
   }
 
