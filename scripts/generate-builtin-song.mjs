@@ -14,9 +14,16 @@
 //                                    beat (the MUST 3 timing showcase).
 //   "Overdrive Core" (Redline Theory) — HYPER ☆9 / ANOTHER ☆11, constant
 //                                    185 BPM (the MUST 1 high-level band).
+//   "Chord Dojo 282" (Prism Unit)  — ANOTHER ☆12 practice song (single chart
+//                                    slot), constant 282 BPM chord+scratch
+//                                    drill, no BGM (specs/practice-song-content.md).
 //
 // AUDIO: ogg vorbis 44.1kHz stereo, peak-normalized to -1dBFS (spec MUST 9),
-// encoded with wasm-media-encoders (libvorbis in WASM — no system ffmpeg needed).
+// encoded with wasm-media-encoders (libvorbis in WASM — no system ffmpeg
+// needed). The practice song is the one exception: it has no BGM, so its
+// `pcm` is a single short keysound sample instead, peak-normalized to 0.18
+// linear (see scripts/builtin-songs/chord-dojo.mjs) and written under
+// `audioFilename: 'keysound.ogg'` instead of the default audio.ogg.
 //
 // Deterministic and re-runnable: no Math.random anywhere; seeded mulberry32
 // PRNGs are used for noise-layer texture, and the ogg stream serial is fixed
@@ -26,6 +33,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildChordDojo } from './builtin-songs/chord-dojo.mjs';
 import { buildFirstLight } from './builtin-songs/first-light.mjs';
 import { encodeOggVorbisStereo } from './builtin-songs/lib.mjs';
 import { buildNeonCascade } from './builtin-songs/neon-cascade.mjs';
@@ -36,8 +44,11 @@ const REPO_ROOT = join(__dirname, '..');
 const SONGS_DIR = join(REPO_ROOT, 'public', 'songs');
 
 // Catalog order is also the "fresh install" display order (song-select sorts by
-// title by default, which happens to match: First Light, Neon Cascade, Overdrive Core).
-const songs = [buildFirstLight(), buildNeonCascade(), buildOverdriveCore()];
+// title by default, which happens to match the first three: First Light, Neon
+// Cascade, Overdrive Core). The practice song is appended last regardless of
+// alphabetical title order — specs/practice-song-content.md wants it after the
+// music songs in catalog display order.
+const songs = [buildFirstLight(), buildNeonCascade(), buildOverdriveCore(), buildChordDojo()];
 
 const seenSongIds = new Set();
 for (const song of songs) {
@@ -52,8 +63,9 @@ for (const song of songs) {
     writeFileSync(join(songDir, filename), `${JSON.stringify(chart, null, 2)}\n`);
   }
   const ogg = await encodeOggVorbisStereo(song.pcm.left, song.pcm.right, song.pcm.sampleRate);
-  writeFileSync(join(songDir, 'audio.ogg'), ogg);
-  song.summary.push(`encoded: audio.ogg ${ogg.length} bytes`);
+  const audioFilename = song.audioFilename ?? 'audio.ogg';
+  writeFileSync(join(songDir, audioFilename), ogg);
+  song.summary.push(`encoded: ${audioFilename} ${ogg.length} bytes`);
   rmSync(join(songDir, 'audio.wav'), { force: true }); // pre-ogg leftover
 }
 

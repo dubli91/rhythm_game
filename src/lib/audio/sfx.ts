@@ -9,19 +9,30 @@
 export interface SfxBufferSourceLike {
   buffer: AudioBuffer | null;
   onended: (() => void) | null;
-  connect(destination: AudioNode): AudioNode;
+  // Return deliberately unknown (the scheduler never chains connect) so
+  // songPlayer.ts's BufferSourceLike — whose connect also returns unknown —
+  // stays assignable and a SongAudioContextLike can build a keysound scheduler.
+  connect(destination: AudioNode): unknown;
   disconnect(): void;
   start(when?: number): void;
   stop(when?: number): void;
 }
 
+// Minimal structural slice createSfxScheduler itself needs — just enough to clamp
+// a schedule time and create sources. Split from SfxAudioContextLike so a caller
+// holding only a SongAudioContextLike (songPlayer.ts: currentTime + createGain +
+// createBufferSource + decodeAudioData, no buffer-synthesis APIs) can still build
+// a keysound scheduler from it (keysound.ts).
+export interface SfxScheduleContextLike {
+  readonly currentTime: number;
+  createBufferSource(): SfxBufferSourceLike;
+}
+
 // Minimal structural slice of AudioContext needed to synthesize + schedule short buffers.
 // (AudioContextLike in ./context deliberately omits buffer APIs; the raw AudioContext satisfies this.)
-export interface SfxAudioContextLike {
+export interface SfxAudioContextLike extends SfxScheduleContextLike {
   readonly sampleRate: number;
-  readonly currentTime: number;
   createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
-  createBufferSource(): SfxBufferSourceLike;
 }
 
 export interface ClickBufferOptions {
@@ -114,7 +125,10 @@ export interface SfxScheduler {
   liveCount(): number;
 }
 
-export function createSfxScheduler(ctx: SfxAudioContextLike, destination: AudioNode): SfxScheduler {
+export function createSfxScheduler(
+  ctx: SfxScheduleContextLike,
+  destination: AudioNode,
+): SfxScheduler {
   const liveSources = new Set<SfxBufferSourceLike>();
 
   function schedule(buffer: AudioBuffer, whenSec: number): void {

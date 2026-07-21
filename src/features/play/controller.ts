@@ -15,6 +15,7 @@ import { createDevOverlay } from './devOverlay';
 import { type ClearLamp, clearLampFor, createGauge } from './gauge';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, createPlayInput } from './input';
 import { createJudge } from './judgement';
+import { createKeysoundPlayer } from './keysound';
 import { clampCover, clampGreenTarget, stepCover, stepGreenTarget, stepHiSpeed } from './options';
 import {
   NOTE_BROKEN,
@@ -30,7 +31,12 @@ import {
 } from './render';
 import { createScorer } from './scoring';
 import type { ScoreSummary } from './scoring';
-import { type SongAudioContextLike, createSongPlayer } from './songPlayer';
+import {
+  type SongAudioContextLike,
+  type SongPlayback,
+  createSilentPlayback,
+  createSongPlayer,
+} from './songPlayer';
 import type { Arrangement, GaugeType, JudgementEvent, TimingDisplayMode } from './types';
 
 export interface PlayResult {
@@ -62,10 +68,17 @@ export interface PlayResult {
   greenLockTargetMs: number;
 }
 
+/** What the session plays: a BGM track, or — for the no-BGM practice song
+ *  (practice-song-content.md MUST 8-10) — a preloaded keysound sample triggered
+ *  on every lane press while the master clock runs with no source node. */
+export type PlaySessionAudio =
+  | { kind: 'bgm'; buffer: AudioBuffer }
+  | { kind: 'keysound'; buffer: AudioBuffer };
+
 export interface PlaySessionOptions {
   song: Song;
   chart: Chart;
-  audioBuffer: AudioBuffer;
+  audio: PlaySessionAudio;
   gaugeType: GaugeType;
   autoplay: boolean;
   mount: HTMLElement;
@@ -162,11 +175,32 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     globalOffsetMs: opts.globalOffsetMs,
     perSongOffsetMs: song.audio.offsetMs,
   });
-  const player = createSongPlayer(opts.audioCtx, opts.gameAudio.musicBus);
-  const playback = player.play(opts.audioBuffer);
+  // BGM mode reserves t0 through the single source node (audio-playback.md MUST 2-3);
+  // keysound mode keeps the identical t0 reservation with NO source node — the
+  // spec's declared exception (practice-song-content.md MUST 9). Its natural end is
+  // time-based: last note (CN tails included) + 2s, delivered through the same
+  // frame-loop completed path the BGM fallback uses.
+  let playback: SongPlayback;
+  let durationMs: number;
+  if (opts.audio.kind === 'bgm') {
+    const player = createSongPlayer(opts.audioCtx, opts.gameAudio.musicBus);
+    playback = player.play(opts.audio.buffer);
+    durationMs = opts.audio.buffer.duration * 1000;
+  } else {
+    playback = createSilentPlayback(opts.audioCtx);
+    let lastNoteMs = 0;
+    for (let i = 0; i < totalNotes; i++) {
+      lastNoteMs = Math.max(lastNoteMs, noteEndTimesMs[i] ?? noteTimesMs[i] ?? 0);
+    }
+    durationMs = lastNoteMs + 2000;
+  }
   clock.start(playback.t0);
-
-  const durationMs = opts.audioBuffer.duration * 1000;
+  // Keysound routes through the MUSIC tier, not effects (practice-song-content.md
+  // MUST 8): it substitutes for the song, so the music volume slider governs it.
+  const keysound =
+    opts.audio.kind === 'keysound'
+      ? createKeysoundPlayer(opts.audioCtx, opts.gameAudio.musicBus, opts.audio.buffer)
+      : null;
   const noteStates = new Uint8Array(totalNotes);
   const heldLanes: boolean[] = new Array<boolean>(8).fill(false);
   const autoplayBeamUntil = new Float64Array(8);
@@ -226,6 +260,10 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   };
 
   function dispatch(event: JudgementEvent): void {
+    // Keysound on every press-derived event (hit/emptyPoor — policy in keysound.ts),
+    // judgement-independent (practice-song-content.md MUST 8). Autoplay presses
+    // arrive through this same sink, so the demo is audible like IIDX autoplay.
+    keysound?.onJudgement(event);
     scorer.apply(event);
     gauge.apply(event);
     if (event.noteIndex >= 0 && event.noteIndex < noteStates.length) {
@@ -326,6 +364,9 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     running = false;
     cancelAnimationFrame(rafId);
     input.detach();
+    // No residual nodes after the session (audio-playback.md acceptance): live
+    // keysound one-shots are stopped, not left to ring out over the next screen.
+    keysound?.cancelAll();
     renderer.destroy();
     delete opts.mount.dataset.devOverlay;
     delete opts.mount.dataset.green;

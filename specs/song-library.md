@@ -12,9 +12,9 @@
 
 ### 내장 곡 — MUST
 
-1. 내장 곡은 정적 자산으로 배포한다: `songs/index.json`(곡 목록·메타데이터) + 곡별 채보 JSON + 음원 파일(ogg).
+1. 내장 곡은 정적 자산으로 배포한다: `songs/index.json`(곡 목록·메타데이터) + 곡별 채보 JSON + 음원 파일(ogg). 연습곡([practice-song-content](practice-song-content.md))은 음원 대신 키음 파일 1개를 둔다.
 2. 곡 목록 메타데이터는 앱 시작 시 로드하고, 채보·음원은 곡 결정 시(플레이 직전) 지연 로드한다.
-3. 최소 3곡 이상의 내장 곡을 포함한다 (난이도 스펙트럼 확인용: 저레벨/중레벨/고레벨).
+3. 최소 3곡 이상의 내장 곡을 포함한다 (난이도 스펙트럼 확인용: 저레벨/중레벨/고레벨). 연습곡([practice-song-content](practice-song-content.md))은 이 3곡 집계에 포함하지 않는다([builtin-song-content](builtin-song-content.md) MUST 1과 동일).
 
 ## 수용 기준
 

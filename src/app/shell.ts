@@ -6,7 +6,11 @@
 // The screen state machine (screens.ts) owns legality of transitions; this module owns
 // presentation.
 
-import { type PlayResult, startPlaySession } from '../features/play/controller';
+import {
+  type PlayResult,
+  type PlaySessionAudio,
+  startPlaySession,
+} from '../features/play/controller';
 import type { ClearLamp } from '../features/play/gauge';
 import { DEFAULT_KEY_MAP, type LaneKeyMap, isValidKeyMap } from '../features/play/input';
 import {
@@ -105,7 +109,7 @@ interface SelectDoc {
 interface LoadedPlayData {
   song: Song;
   chart: Chart;
-  audioBuffer: AudioBuffer;
+  audio: PlaySessionAudio;
 }
 
 const STYLES = `
@@ -586,10 +590,11 @@ export function bootShell(root: HTMLElement): void {
     if (selectModel === null) return null;
     const row = selectModel.rows().find((r) => r.selected);
     // Chart rows inherit their song's preview; folder rows have no song and entries
-    // without preview metadata (no catalogEntry, e.g. imported songs) stay silent.
+    // without preview metadata (no catalogEntry, e.g. imported songs; the keysound
+    // practice song, song-select.md SHOULD 12) stay silent.
     const catalogEntry =
       row === undefined || row.kind === 'folder' ? undefined : row.entry.catalogEntry;
-    if (catalogEntry?.preview === undefined) return null;
+    if (catalogEntry?.preview === undefined || catalogEntry.audio === undefined) return null;
     return {
       songId: catalogEntry.songId,
       audioUrl: catalogEntry.audio,
@@ -930,11 +935,20 @@ export function bootShell(root: HTMLElement): void {
       audioCtx as unknown as SongAudioContextLike,
       gameAudio.musicBus,
     );
-    const audioBuffer =
-      playable.audio.kind === 'url'
-        ? await player.loadFromUrl(playable.audio.url)
-        : await player.loadFromBlob(playable.audio.blob);
-    return { song: playable.song, chart, audioBuffer };
+    // Keysound entries preload + decode the sample here, at song decision — play
+    // never fetches (practice-song-content.md MUST 10); loadFromUrl is reused
+    // purely as fetch+decode.
+    const audio: PlaySessionAudio =
+      playable.audio.kind === 'keysound'
+        ? { kind: 'keysound', buffer: await player.loadFromUrl(playable.audio.url) }
+        : {
+            kind: 'bgm',
+            buffer:
+              playable.audio.kind === 'url'
+                ? await player.loadFromUrl(playable.audio.url)
+                : await player.loadFromBlob(playable.audio.blob),
+          };
+    return { song: playable.song, chart, audio };
   }
 
   async function startPlay(data: LoadedPlayData): Promise<void> {
@@ -944,7 +958,7 @@ export function bootShell(root: HTMLElement): void {
     await startPlaySession({
       song: data.song,
       chart: data.chart,
-      audioBuffer: data.audioBuffer,
+      audio: data.audio,
       gaugeType: playOptions.gaugeType,
       autoplay: playOptions.autoplay,
       mount: playEl,

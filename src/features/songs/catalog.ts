@@ -20,7 +20,14 @@ export interface CatalogSongEntry {
   genre: string;
   bpm: { min: number; max: number };
   charts: CatalogChartEntry[];
-  audio: string;
+  /** BGM track URL. Exactly one of audio/keysound is present (parseSongEntry enforces it). */
+  audio?: string;
+  /**
+   * Keysound-sample URL for the no-BGM practice song (practice-song-content.md
+   * MUST 11): replaces audio AND preview — the entry is silent on song select
+   * by construction and plays only the keysound during play.
+   */
+  keysound?: string;
   offsetMs: number;
   preview?: { startMs: number; durationMs: number };
   license: string;
@@ -128,7 +135,20 @@ function parseSongEntry(raw: unknown, path: string): CatalogSongEntry {
     throw new Error(`Invalid song catalog: ${path}.charts must be a non-empty array`);
   }
   const charts = chartsRaw.map((entry, i) => parseChartEntry(entry, `${path}.charts[${i}]`));
-  if (!isNonEmptyString(raw.audio)) {
+  // Exactly one of audio/keysound (practice-song-content.md MUST 11): a BGM song
+  // carries audio (+ optional preview); the keysound practice song carries only
+  // the keysound path and MUST NOT carry preview (no select-screen preview — silent).
+  if (raw.keysound !== undefined) {
+    if (!isNonEmptyString(raw.keysound)) {
+      throw new Error(`Invalid song catalog: ${path}.keysound must be a non-empty string`);
+    }
+    if (raw.audio !== undefined) {
+      throw new Error(`Invalid song catalog: ${path} must not have both audio and keysound`);
+    }
+    if (raw.preview !== undefined) {
+      throw new Error(`Invalid song catalog: ${path}.preview is not allowed on a keysound entry`);
+    }
+  } else if (!isNonEmptyString(raw.audio)) {
     throw new Error(`Invalid song catalog: ${path}.audio must be a non-empty string`);
   }
   if (!isFiniteNumber(raw.offsetMs)) {
@@ -145,7 +165,8 @@ function parseSongEntry(raw: unknown, path: string): CatalogSongEntry {
     genre: raw.genre,
     bpm,
     charts,
-    audio: raw.audio,
+    audio: typeof raw.audio === 'string' ? raw.audio : undefined,
+    keysound: typeof raw.keysound === 'string' ? raw.keysound : undefined,
     offsetMs: raw.offsetMs,
     preview,
     license: raw.license,
@@ -199,12 +220,19 @@ export async function loadBuiltinSong(
     const raw = await response.json();
     charts.push(loadChart(raw));
   }
+  // Song.audio.ref is whichever audio asset the song plays from — the BGM track,
+  // or the keysound sample for the no-BGM practice song (parseSongEntry
+  // guarantees exactly one of the two is present).
+  const audioRef = entry.audio ?? entry.keysound;
+  if (audioRef === undefined) {
+    throw new Error(`catalog entry "${entry.songId}" has neither audio nor keysound`);
+  }
   return {
     songId: entry.songId,
     title: entry.title,
     artist: entry.artist,
     genre: entry.genre,
-    audio: { source: 'builtin', ref: entry.audio, offsetMs: entry.offsetMs },
+    audio: { source: 'builtin', ref: audioRef, offsetMs: entry.offsetMs },
     charts,
   };
 }

@@ -40,7 +40,11 @@ export interface LibraryDeps {
   db?: IDBDatabase | null;
 }
 
-export type AudioSource = { kind: 'url'; url: string } | { kind: 'blob'; blob: Blob };
+export type AudioSource =
+  | { kind: 'url'; url: string }
+  | { kind: 'blob'; blob: Blob }
+  /** no-BGM practice song: url points at the keysound sample, not a music track */
+  | { kind: 'keysound'; url: string };
 
 export interface PlayableSong {
   song: Song;
@@ -157,7 +161,15 @@ export async function loadPlayableSong(
       );
     }
     const song = await loadBuiltinSong(entry.catalogEntry, deps.fetchFn);
-    return { song, audio: { kind: 'url', url: entry.catalogEntry.audio } };
+    const { audio, keysound } = entry.catalogEntry;
+    if (keysound !== undefined) {
+      return { song, audio: { kind: 'keysound', url: keysound } };
+    }
+    if (audio === undefined) {
+      // parseSongEntry guarantees one of the two; reaching here is a programming error.
+      throw new Error(`builtin library entry "${entry.songId}" has neither audio nor keysound`);
+    }
+    return { song, audio: { kind: 'url', url: audio } };
   }
 
   if (!deps.db) {

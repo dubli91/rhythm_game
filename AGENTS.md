@@ -29,7 +29,7 @@ Run these after implementing to get immediate feedback:
   must not re-implement them.
 - Directory layout: `src/lib/` (stdlib), `src/app/` (shell + entry `src/app/main.ts`),
   `src/features/` (feature modules), `public/songs/` (built-in song assets).
-- Regenerate built-in song assets: `node scripts/generate-builtin-song.mjs` (deterministic; rewrites all of public/songs/ — 3 songs, per-song modules in scripts/builtin-songs/). Built-in audio is ogg vorbis (spec MUST 9), encoded via the `wasm-media-encoders` devDependency (libvorbis WASM, no system ffmpeg); the ogg stream serial is fixed in scripts/builtin-songs/lib.mjs so regeneration is byte-identical including the .ogg files. "First Light" keeps its own float math for the same reason; verify with `git status public/songs/` (must be clean) after regen.
+- Regenerate built-in song assets: `node scripts/generate-builtin-song.mjs` (deterministic; rewrites all of public/songs/ — 4 songs incl. the no-BGM practice song 'Chord Dojo 282' (keysound.ogg instead of audio.ogg + no preview field), per-song modules in scripts/builtin-songs/). Built-in audio is ogg vorbis (spec MUST 9), encoded via the `wasm-media-encoders` devDependency (libvorbis WASM, no system ffmpeg); the ogg stream serial is fixed in scripts/builtin-songs/lib.mjs so regeneration is byte-identical including the .ogg files. "First Light" keeps its own float math for the same reason; verify with `git status public/songs/` (must be clean) after regen.
 - Do NOT `pkill -f 'vite preview'` — the pattern matches the agent shell itself; kill by port (`ss -ltnp | grep 4173`).
 
 ### Codebase Patterns

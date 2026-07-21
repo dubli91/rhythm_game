@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { computeNoteTimesMs, createTimingIndex } from '../../lib/chart/timing';
 import { loadChart } from '../../lib/chart/validate';
+import { PRACTICE_PRESETS } from '../practice/pattern';
 import { parseCatalog } from './catalog';
 import type { CatalogSongEntry } from './catalog';
 
@@ -107,15 +108,23 @@ describe('built-in song catalog', () => {
   );
 
   describe.each(catalog.songs)('song $songId ($title by $artist)', (song: CatalogSongEntry) => {
-    const audioPath = join(PUBLIC_DIR, song.audio);
+    // The BGM track, or the keysound sample for the no-BGM practice song
+    // (practice-song-content.md MUST 11) — parseSongEntry guarantees exactly one.
+    const audioAsset = song.audio ?? song.keysound;
+    if (audioAsset === undefined) throw new Error(`${song.songId} has no audio asset`);
+    const audioPath = join(PUBLIC_DIR, audioAsset);
 
-    it('has an audio file that exists and parses as ogg vorbis 44.1kHz stereo (MUST 9)', () => {
+    it('has an audio asset that exists and parses as ogg vorbis 44.1kHz stereo (MUST 9 / practice MUST 7)', () => {
       expect(existsSync(audioPath)).toBe(true);
-      expect(song.audio.endsWith('.ogg')).toBe(true);
+      expect(audioAsset.endsWith('.ogg')).toBe(true);
       const buffer = readFileSync(audioPath);
       const info = parseOggVorbis(buffer);
       expect(info.sampleRate).toBe(44100);
       expect(info.numChannels).toBe(2);
+      if (song.keysound !== undefined) {
+        // practice-song-content.md MUST 7: a short decaying keysound, <=150ms.
+        expect(info.durationMs).toBeLessThanOrEqual(150);
+      }
     });
 
     it.each(song.charts)(
@@ -150,11 +159,15 @@ describe('built-in song catalog', () => {
           previousTime = timeMs;
         }
 
-        // The audio must contain the whole chart, plus at least a 1s tail.
-        const audioBuffer = readFileSync(audioPath);
-        const audioInfo = parseOggVorbis(audioBuffer);
-        const lastTimeMs = times.reduce((max, t) => Math.max(max, t), 0);
-        expect(lastTimeMs + 1000).toBeLessThan(audioInfo.durationMs);
+        // The audio must contain the whole chart, plus at least a 1s tail. The
+        // keysound practice song has no BGM to contain the chart — its session
+        // length is last note + 2s by construction (practice-song-content MUST 9).
+        if (song.audio !== undefined) {
+          const audioBuffer = readFileSync(audioPath);
+          const audioInfo = parseOggVorbis(audioBuffer);
+          const lastTimeMs = times.reduce((max, t) => Math.max(max, t), 0);
+          expect(lastTimeMs + 1000).toBeLessThan(audioInfo.durationMs);
+        }
       },
     );
   });
@@ -171,9 +184,14 @@ function loadChartAt(chartPath: string) {
 }
 
 describe('built-in content coverage (builtin-song-content.md MUST 1-4)', () => {
-  it('ships at least 3 songs, each with at least 2 difficulty slots (MUST 1-2)', () => {
-    expect(catalog.songs.length).toBeGreaterThanOrEqual(3);
-    for (const song of catalog.songs) {
+  // The keysound practice song is excluded from the 3-song aggregate, the 2-slot
+  // rule, and the level-band coverage (practice-song-content.md MUST 2 exception):
+  // the music catalog must satisfy MUST 1-2 entirely on its own.
+  const bgmSongs = catalog.songs.filter((song) => song.keysound === undefined);
+
+  it('ships at least 3 BGM songs, each with at least 2 difficulty slots (MUST 1-2)', () => {
+    expect(bgmSongs.length).toBeGreaterThanOrEqual(3);
+    for (const song of bgmSongs) {
       expect(song.charts.length, `${song.title} needs >=2 difficulty slots`).toBeGreaterThanOrEqual(
         2,
       );
@@ -187,7 +205,7 @@ describe('built-in content coverage (builtin-song-content.md MUST 1-4)', () => {
       [9, 12],
     ];
     for (const [lo, hi] of bands) {
-      const covered = catalog.songs.some((song) =>
+      const covered = bgmSongs.some((song) =>
         song.charts.some((chart) => chart.level >= lo && chart.level <= hi),
       );
       expect(covered, `no song has a chart in level band ${lo}-${hi}`).toBe(true);
@@ -259,5 +277,136 @@ describe('built-in content coverage (builtin-song-content.md MUST 1-4)', () => {
       expect(song.bpm.min, `${song.title} catalog bpm.min`).toBe(songMin);
       expect(song.bpm.max, `${song.title} catalog bpm.max`).toBe(songMax);
     }
+  });
+});
+
+// --- practice song coverage (specs/practice-song-content.md) ---------------------
+// Pins the keysound practice song's SHAPE: the catalog exceptions (MUST 1-2, 7, 11),
+// the fixed-BPM-282 16-bar tap-only chart (MUST 3), the A/B/C section structure the
+// pattern was authored to (MUST 4-5 + the C-section acceptance criterion), and the
+// SHOULD 14 practice-preset excerpts, which must never drift from the shipped chart.
+
+describe('practice song content (practice-song-content.md)', () => {
+  const entry = catalog.songs.find((song) => song.keysound !== undefined);
+
+  function dojoChart() {
+    if (entry === undefined) throw new Error('keysound practice song missing from catalog');
+    const chartEntry = entry.charts[0];
+    if (chartEntry === undefined) throw new Error('practice song has no chart');
+    return loadChartAt(chartEntry.chartPath);
+  }
+
+  it('ships exactly one keysound song: 1 chart slot, PRACTICE genre, no preview (MUST 1-2, 11, SHOULD 13)', () => {
+    const keysoundSongs = catalog.songs.filter((song) => song.keysound !== undefined);
+    expect(keysoundSongs.length).toBe(1);
+    if (entry === undefined) throw new Error('unreachable');
+    expect(entry.charts.length).toBe(1);
+    expect(entry.charts[0]?.chartId).toBe(`${entry.songId}-another`);
+    expect(entry.genre).toBe('PRACTICE');
+    expect(entry.audio).toBeUndefined();
+    expect(entry.preview).toBeUndefined();
+    // audio-playback.md exception paragraph: keysound entries carry offsetMs 0.
+    expect(entry.offsetMs).toBe(0);
+    // MUST 7: the keysound's license is recorded in index.json (permissive only).
+    expect(entry.license).toMatch(/CC0/);
+  });
+
+  it('is a fixed-BPM-282, 4/4, 16-bar, tap-only chart (MUST 3)', () => {
+    const chart = dojoChart();
+    expect(chart.bpm).toEqual({ init: 282, min: 282, max: 282 });
+    expect(chart.timing.bpmEvents).toEqual([{ beat: 0, bpm: 282 }]);
+    expect(chart.timing.stopEvents).toEqual([]);
+    expect(chart.notes.every((note) => note.type === 'tap')).toBe(true);
+    const lastBeat = chart.notes[chart.notes.length - 1]?.beat ?? -1;
+    expect(lastBeat, 'pattern must reach bar 16').toBeGreaterThanOrEqual(60);
+    expect(lastBeat, 'pattern must stay within 16 bars').toBeLessThan(64);
+  });
+
+  it('A section (bars 1-9): 2-4-key chord every beat, adjacent chords differ, scratch on allowed beats only (MUST 4-5)', () => {
+    const chart = dojoChart();
+    let previousChord = '';
+    for (let beat = 0; beat < 36; beat++) {
+      const keyLanes = chart.notes
+        .filter((note) => note.beat === beat && note.lane >= 1)
+        .map((note) => note.lane)
+        .sort((a, b) => a - b);
+      expect(keyLanes.length, `beat ${beat} chord size`).toBeGreaterThanOrEqual(2);
+      expect(keyLanes.length, `beat ${beat} chord size`).toBeLessThanOrEqual(4);
+      const chord = keyLanes.join(',');
+      expect(chord, `adjacent chords at beats ${beat - 1}/${beat} must differ`).not.toBe(
+        previousChord,
+      );
+      previousChord = chord;
+    }
+    // The chord stream is strictly quarter-note: no off-grid notes before bar 10.
+    expect(chart.notes.every((note) => note.beat >= 36 || Number.isInteger(note.beat))).toBe(true);
+    // Scratch: on some (not all) bar starts, plus exactly ONE middle bar adding
+    // beat 3 (in-bar offset 2) — the spec's "1·3박 2회 배치 마디 1개".
+    const scratchBeats = chart.notes
+      .filter((note) => note.beat < 36 && note.lane === 0)
+      .map((note) => note.beat);
+    const offBarStart = scratchBeats.filter((beat) => beat % 4 !== 0);
+    expect(offBarStart.length).toBe(1);
+    expect((offBarStart[0] ?? 0) % 4).toBe(2);
+    const barsWithScratch = new Set(scratchBeats.map((beat) => Math.floor(beat / 4)));
+    expect(barsWithScratch.size).toBeGreaterThanOrEqual(2);
+    expect(barsWithScratch.size, 'scratch on SOME bars, not all').toBeLessThan(9);
+  });
+
+  it('B section (bars 10-12): bar-start scratch+chord kept, singles mixed between (MUST 4)', () => {
+    const chart = dojoChart();
+    for (let bar = 9; bar < 12; bar++) {
+      const start = bar * 4;
+      const startScratch = chart.notes.some((note) => note.beat === start && note.lane === 0);
+      const startChord = chart.notes.filter((note) => note.beat === start && note.lane >= 1).length;
+      expect(startScratch, `bar ${bar + 1} start scratch`).toBe(true);
+      expect(startChord, `bar ${bar + 1} start chord`).toBeGreaterThanOrEqual(2);
+      // The relaxation is real: at least one in-bar position holds a SINGLE note.
+      const positions = new Map<number, number>();
+      for (const note of chart.notes) {
+        if (note.beat > start && note.beat < start + 4 && note.lane >= 1) {
+          positions.set(note.beat, (positions.get(note.beat) ?? 0) + 1);
+        }
+      }
+      expect(
+        [...positions.values()].some((count) => count === 1),
+        `bar ${bar + 1} has no single notes between chords`,
+      ).toBe(true);
+    }
+  });
+
+  it('C section (bars 13-16): scratch simultaneous with a 2-3-key chord on almost every beat, every bar (MUST 4 + acceptance)', () => {
+    const chart = dojoChart();
+    for (let bar = 12; bar < 16; bar++) {
+      let simultaneous = 0;
+      for (let beatInBar = 0; beatInBar < 4; beatInBar++) {
+        const beat = bar * 4 + beatInBar;
+        const scratch = chart.notes.some((note) => note.beat === beat && note.lane === 0);
+        const chordSize = chart.notes.filter((note) => note.beat === beat && note.lane >= 1).length;
+        if (scratch && chordSize >= 2 && chordSize <= 3) simultaneous++;
+      }
+      expect(simultaneous, `bar ${bar + 1} scratch+chord beats`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('practice presets mirror the chart excerpts exactly (SHOULD 14 — no drift)', () => {
+    const chart = dojoChart();
+    const excerpt = (fromBeat: number, toBeat: number) =>
+      chart.notes
+        .filter((note) => note.beat >= fromBeat && note.beat < toBeat)
+        .map((note) => `${note.beat - fromBeat}:${note.lane}`)
+        .sort();
+    const built = (key: string) => {
+      const preset = PRACTICE_PRESETS.find((p) => p.key === key);
+      if (preset === undefined) throw new Error(`missing practice preset ${key}`);
+      // The excerpts only make sense at the source tempo (editor applies it).
+      expect(preset.bpm).toBe(282);
+      return preset
+        .build(4)
+        .map((note) => `${note.beat}:${note.lane}`)
+        .sort();
+    };
+    expect(built('dojo-chords')).toEqual(excerpt(0, 16));
+    expect(built('dojo-scratch')).toEqual(excerpt(48, 64));
   });
 });

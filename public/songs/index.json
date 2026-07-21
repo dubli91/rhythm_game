@@ -98,6 +98,28 @@
         "durationMs": 10000
       },
       "license": "CC0-1.0 — original programmatically generated composition (no third-party material)"
+    },
+    {
+      "songId": "song-19d6fdce",
+      "title": "Chord Dojo 282",
+      "artist": "Prism Unit",
+      "genre": "PRACTICE",
+      "bpm": {
+        "min": 282,
+        "max": 282
+      },
+      "charts": [
+        {
+          "chartId": "song-19d6fdce-another",
+          "difficulty": "ANOTHER",
+          "level": 12,
+          "noteCount": 182,
+          "chartPath": "songs/song-19d6fdce/chart-another.json"
+        }
+      ],
+      "keysound": "songs/song-19d6fdce/keysound.ogg",
+      "offsetMs": 0,
+      "license": "CC0-1.0 — original programmatically generated keysound (no third-party material)"
     }
   ]
 }

@@ -7,6 +7,11 @@
 키음 방식이 아닌 단일 음원 방식이므로, 곡당 오디오는 트랙 1개다.
 리듬게임의 싱크는 오디오 클럭이 기준이어야 하므로 `AudioContext.currentTime`을 유일한 시간원으로 삼는다.
 
+예외: 연습곡([practice-song-content](practice-song-content.md))은 음원 없이 단일 키음만
+재생한다 (MUST 2 소스 노드의 예외). 이때도 t0 예약(MUST 3)과 곡 시간 변환(MUST 5)은
+동일하게 적용된다. 연습곡의 곡별오프셋(MUST 5)은 0이며(키음 엔트리의 `offsetMs`가 0),
+곡 시간 공식은 그 외 완전히 동일하다.
+
 ## 요구사항
 
 ### 재생 — MUST

@@ -19,6 +19,12 @@
    ([chart-format](chart-format.md) MUST 5·7)을 실사용 경로로 검증한다.
 4. 최소 1개 채보는 BPM 변경·STOP 없는 단일 BPM — 수직 슬라이스 기준 채보로 쓴다.
 
+> **예외**: 연습곡([practice-song-content](practice-song-content.md))은 MUST 1의 3곡 집계,
+> MUST 2의 난이도 슬롯 2개, MUST 7의 `audio`·`preview` 필드, MUST 9의 음원 요구에서
+> 제외된다. 저장 구조·결정적 ID·검증(MUST 6·8·11·12)은 동일하게 따르되, MUST 6의
+> 디렉터리 레이아웃에서 `audio.ogg` 자리에 `keysound.ogg`를 둔다
+> ([practice-song-content](practice-song-content.md) MUST 11).
+
 ### 라이선스 — MUST
 
 5. 음원은 자체 창작곡 또는 CC0/영리 재배포 허용 퍼미시브 라이선스만 사용한다(저작권 있는 기존

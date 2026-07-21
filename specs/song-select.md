@@ -31,7 +31,7 @@
 ### SHOULD
 
 11. 검색(제목/아티스트 부분 일치).
-12. 미리듣기: 곡에 커서를 올리면 하이라이트 구간 재생([audio-playback](audio-playback.md)).
+12. 미리듣기: 곡에 커서를 올리면 하이라이트 구간 재생([audio-playback](audio-playback.md)). 미리듣기 메타데이터가 없는 곡(키음 연습곡([practice-song-content](practice-song-content.md)))은 선택 시 무음으로 두고 미리듣기를 시도하지 않는다.
 13. 레벨 폴더 뷰 (레벨 1~12별 그룹핑).
 
 ## 수용 기준

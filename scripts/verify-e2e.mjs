@@ -73,7 +73,15 @@ const waitForPreview = (state, song) =>
   );
 
 await step('song preview: plays on cursor settle, follows the song, stops off-screen', async () => {
-  // Cursor starts on the first song row (First Light under TITLE sort).
+  // Cursor starts on the first song row — Chord Dojo 282 under TITLE sort, which
+  // has NO preview metadata (keysound practice song): the preview must stay idle
+  // (song-select.md SHOULD 12). 800ms > the 300ms settle debounce, so a wrongly
+  // started preview would already be visible.
+  await page.waitForTimeout(800);
+  const onDojo = await previewAttrs();
+  if (onDojo.state !== 'idle')
+    throw new Error(`practice song must not preview, got ${JSON.stringify(onDojo)}`);
+  await page.keyboard.press('ArrowDown'); // next song row: First Light
   await waitForPreview('playing', 'song-6f90aea6');
   console.log(`  preview after settle: ${JSON.stringify(await previewAttrs())}`);
   await page.keyboard.press('ArrowDown'); // next song row: Neon Cascade
@@ -286,8 +294,8 @@ await step('search (/): filters live, owns the keyboard while focused (SHOULD 11
   await page.keyboard.press('Delete');
   await page.keyboard.press('Escape');
   const songCount = await page.$$eval('.song-list li.song-row', (ls) => ls.length);
-  if (songCount !== 3)
-    throw new Error(`clearing the filter should restore 3 songs, got ${songCount}`);
+  if (songCount !== 4)
+    throw new Error(`clearing the filter should restore 4 songs, got ${songCount}`);
 });
 
 await step(
@@ -297,14 +305,15 @@ await step(
     const line = await page.$eval('.sort-line', (n) => n.textContent);
     if (!line.includes('LEVEL FOLDERS'))
       throw new Error(`readout should show LEVEL FOLDERS: ${line}`);
-    // Catalog levels: FL N4/H7, NC N6/H8, OC H9/A11 -> folders 4,6,7,8,9,11 with 1 chart each.
+    // Catalog levels: FL N4/H7, NC N6/H8, OC H9/A11, Chord Dojo A12 ->
+    // folders 4,6,7,8,9,11,12 with 1 chart each.
     const folders = await page.$$eval('.song-list li.folder-row .folder-title', (ls) =>
       ls.map((l) => l.textContent),
     );
     console.log(`  folders: ${JSON.stringify(folders)}`);
     const levels = folders.map((f) => f.replace('LEVEL ', ''));
-    if (levels.join(',') !== '4,6,7,8,9,11')
-      throw new Error(`expected folders 4,6,7,8,9,11 ascending, got ${levels.join(',')}`);
+    if (levels.join(',') !== '4,6,7,8,9,11,12')
+      throw new Error(`expected folders 4,6,7,8,9,11,12 ascending, got ${levels.join(',')}`);
     const persisted = await page.evaluate(() => localStorage.getItem('select.v1'));
     if (!persisted || !persisted.includes('"viewMode":"level"'))
       throw new Error(`viewMode not persisted: ${persisted}`);
@@ -526,14 +535,22 @@ const armTimingObserver = () =>
     window.__timingObs.observe(el, { attributes: true, attributeFilter: ['data-timing'] });
   });
 const timingSeen = () => page.evaluate(() => window.__timingSeen ?? []);
-// Round-robin over every lane: a full cycle (~8 presses) is shorter than a note's
-// ±250ms window, so any note that scrolls by is consumed by SOME press — and a
-// mash-timed consuming press is essentially never PGREAT, so it classifies.
+// Round-robin over every lane, PACED at 60ms/press: a full cycle (8 × 60ms =
+// 480ms) still fits inside a note's ±250ms window, so any note that scrolls by
+// is consumed by SOME press — and a mash-timed consuming press is essentially
+// never PGREAT, so it classifies. The pacing is load-bearing: the very next
+// press is usually an empty POOR, which correctly CLEARS the indicator
+// (MUST 18), so a classified value only lives press-to-press. 60ms exceeds the
+// frame period even at degraded headless fps, guaranteeing the data-timing
+// mirror samples it; full-speed mashing cleared values within ~12ms and made
+// the observer miss every hit (grid FAST counts nonzero, seen[] empty).
 const mashAllLanes = async (seconds) => {
   const codes = ['KeyS', 'KeyD', 'KeyF', 'Space', 'KeyJ', 'KeyK', 'KeyL', 'ShiftLeft'];
   const until = Date.now() + seconds * 1000;
+  let i = 0;
   while (Date.now() < until) {
-    for (const code of codes) await page.keyboard.press(code);
+    await page.keyboard.press(codes[i++ % codes.length]);
+    await page.waitForTimeout(60);
   }
 };
 const enterFirstLightPlay = async () => {
@@ -568,7 +585,7 @@ await step(
       throw new Error('no classified judgement yet, but the indicator fired');
     // Mash across the first note section: consumed notes yield FAST/SLOW words.
     await page.waitForTimeout(4500);
-    await mashAllLanes(4);
+    await mashAllLanes(6);
     const seen = await timingSeen();
     console.log(`  indicator values seen: ${JSON.stringify(seen)}`);
     if (!seen.some((v) => v === 'FAST' || v === 'SLOW'))
@@ -595,7 +612,7 @@ await step('±ms mode: indicator shows the signed δ integer (rendering MUST 18)
   if (!bar.includes('TIMING ±ms')) throw new Error(`mode should read ±ms: ${bar}`);
   await enterFirstLightPlay();
   await page.waitForTimeout(7000); // reach the first notes
-  await mashAllLanes(4);
+  await mashAllLanes(6);
   const seen = await timingSeen();
   console.log(`  indicator values seen: ${JSON.stringify(seen)}`);
   if (!seen.some((v) => /^[+-]\d+ms$/.test(v)))
@@ -616,7 +633,7 @@ await step(
     if (!bar.includes('TIMING OFF')) throw new Error(`mode should read OFF: ${bar}`);
     await enterFirstLightPlay();
     await page.waitForTimeout(7000);
-    await mashAllLanes(4);
+    await mashAllLanes(6);
     const seen = await timingSeen();
     if (seen.length !== 0)
       throw new Error(`OFF mode must never display, saw ${JSON.stringify(seen)}`);
@@ -696,6 +713,93 @@ await step('cycle arrangement to MIRROR for the dense-chart smoke', async () => 
 await step('play smoke: Overdrive Core ANOTHER (densest chart) loads + autoplays', async () => {
   await playSmoke('Overdrive Core', 'ANOTHER', 8);
   await page.screenshot({ path: SHOT('10-overdrive-smoke') });
+});
+
+// --- Practice song (practice-song-content.md acceptance criteria) ---
+// A no-BGM built-in song: the play path fetches chart + keysound.ogg only (never
+// a BGM track), the session ends naturally at last note + 2s, and records ride
+// the normal path — autoplay writes nothing, a real play writes playCount.
+
+await step('practice song: 1-slot entry on select, ANOTHER 12 / 182 notes', async () => {
+  await page.keyboard.press('KeyR'); // MIRROR -> OFF: acceptance runs on the raw chart
+  await navigateToSong('Chord Dojo 282');
+  await page.keyboard.press('Enter'); // expand
+  await page.waitForSelector('.song-list li.chart-row', { timeout: 5000 });
+  const chartRows = await page.$$eval('.song-list li.chart-row', (ls) =>
+    ls.map((l) => l.textContent),
+  );
+  console.log(`  dojo chart rows: ${JSON.stringify(chartRows)}`);
+  if (chartRows.length !== 1) throw new Error('practice song must have exactly 1 chart row');
+  if (!chartRows[0].includes('ANOTHER') || !chartRows[0].includes('12'))
+    throw new Error(`expected ANOTHER 12, got ${chartRows[0]}`);
+  if (!chartRows[0].includes('182')) throw new Error(`expected 182 notes, got ${chartRows[0]}`);
+});
+
+await step(
+  'practice song: autoplay run — keysound fetched, NO BGM request, natural end',
+  async () => {
+    const reqs = [];
+    const onReq = (r) => reqs.push(r.url());
+    page.on('request', onReq);
+    await page.keyboard.press('Enter'); // play (autoplay still ON from the smokes)
+    await page.waitForSelector('.screen-play canvas', { timeout: 20000 });
+    // Natural completion: 1s lead-in + 13.4s chart (64 beats @282) + 2s tail + result delay.
+    await page.waitForSelector('.result-status', { timeout: 30000 });
+    page.off('request', onReq);
+    const dojoReqs = reqs.filter((u) => u.includes('song-19d6fdce'));
+    console.log(`  dojo requests: ${JSON.stringify(dojoReqs)}`);
+    if (!dojoReqs.some((u) => u.endsWith('keysound.ogg')))
+      throw new Error('keysound.ogg must be preloaded at song decision (MUST 10)');
+    if (dojoReqs.some((u) => u.includes('audio')))
+      throw new Error(
+        `practice song must never fetch a BGM track, got ${JSON.stringify(dojoReqs)}`,
+      );
+    const grid = await page.$eval('.result-grid', (n) => n.textContent);
+    console.log(`  dojo autoplay grid: ${grid}`);
+    // 182 perfect hits and a clean count row prove the silent master clock judges
+    // exactly like the BGM path (t0 reservation + advance-driven completion).
+    if (!grid.includes('PGREAT182'))
+      throw new Error(`autoplay should PGREAT all 182 notes: ${grid}`);
+    if (!grid.includes('BAD0POOR (miss)0POOR (empty)0FAST0SLOW0BP0'))
+      throw new Error(`autoplay run must be clean: ${grid}`);
+    const rec = await page.evaluate(() => localStorage.getItem('records.v1'));
+    if (rec?.includes('song-19d6fdce'))
+      throw new Error('autoplay must not write a practice-song record');
+    await page.screenshot({ path: SHOT('10b-dojo-autoplay') });
+    await page.keyboard.press('Escape'); // back to select
+    await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
+    await page.keyboard.press('Escape'); // collapse for the next navigate
+  },
+);
+
+await step('practice song: real input plays keysounds + abandon writes a record', async () => {
+  await page.keyboard.press('KeyA'); // autoplay OFF — real presses must judge + keysound
+  await navigateToSong('Chord Dojo 282');
+  await page.keyboard.press('Enter'); // expand
+  await page.waitForSelector('.song-list li.chart-row', { timeout: 5000 });
+  await page.keyboard.press('Enter'); // play
+  await page.waitForSelector('.screen-play canvas', { timeout: 20000 });
+  await page.waitForTimeout(2200); // through the lead-in, into the A section
+  // Real presses drive the keysound trigger path (hit AND emptyPoor kinds); any
+  // scheduling error would surface as a page error and fail the run.
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press('KeyS');
+    await page.keyboard.press('Space');
+    await page.keyboard.press('ShiftLeft');
+    await page.waitForTimeout(120);
+  }
+  await page.keyboard.press('Escape'); // abandon -> FAILED result
+  await page.waitForSelector('.result-status', { timeout: 8000 });
+  const rec = await page.evaluate(() => localStorage.getItem('records.v1'));
+  if (rec === null || !rec.includes('song-19d6fdce::song-19d6fdce-another'))
+    throw new Error(`abandoned real play should write playCount for the practice song: ${rec}`);
+  await page.screenshot({ path: SHOT('10c-dojo-real') });
+  await page.keyboard.press('Escape'); // back to select
+  await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
+  await page.keyboard.press('Escape'); // collapse
+  await page.keyboard.press('KeyA'); // autoplay back ON — later steps expect it
+  const bar = await page.$eval('.options-bar', (n) => n.textContent);
+  if (!bar.includes('AUTOPLAY ON')) throw new Error(`autoplay restore failed: ${bar}`);
 });
 
 // --- Practice mode (practice-mode.md acceptance criteria) ---

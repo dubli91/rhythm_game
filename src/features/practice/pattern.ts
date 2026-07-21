@@ -189,6 +189,8 @@ export interface PracticePreset {
   key: string;
   name: string;
   build(bars: number): PracticePatternNote[];
+  /** Source tempo the excerpt was transcribed at; unset presets don't touch pattern.bpm. */
+  bpm?: number;
 }
 
 // practice-mode.md SHOULD 12: trill / staircase / chords / scratch+keys.
@@ -237,9 +239,84 @@ function buildScratchKeys(bars: number): PracticePatternNote[] {
   return sortNotes(notes);
 }
 
+// practice-song-content.md SHOULD 14: 4-bar (16-beat) excerpts transcribed verbatim from the
+// built-in "Chord Dojo 282" chart — dojo-chords mirrors bars 1-4 (A "chord stream" section),
+// dojo-scratch mirrors bars 13-16 (C "scratch rush" section). Index = beat within the excerpt.
+const DOJO_CHORDS_EXCERPT: readonly (readonly number[])[] = [
+  [0, 1, 3, 5],
+  [4, 6],
+  [2, 5, 7],
+  [3, 6],
+  [1, 4, 6],
+  [2, 5],
+  [3, 5, 7],
+  [1, 4],
+  [0, 2, 4, 7],
+  [1, 5],
+  [3, 6],
+  [2, 4, 6],
+  [1, 3, 6],
+  [4, 7],
+  [2, 5],
+  [1, 3, 5, 7],
+];
+
+const DOJO_SCRATCH_EXCERPT: readonly (readonly number[])[] = [
+  [0, 1, 5],
+  [0, 3, 7],
+  [0, 2, 6],
+  [0, 1, 4, 7],
+  [0, 3, 5],
+  [0, 2, 7],
+  [0, 4, 6],
+  [1, 3, 5],
+  [0, 2, 7],
+  [0, 1, 4],
+  [0, 3, 6],
+  [0, 2, 5, 7],
+  [0, 1, 3],
+  [0, 4, 7],
+  [0, 2, 5],
+  [0, 1, 3, 5],
+];
+
+const DOJO_EXCERPT_BEATS = 16; // 4 bars
+
+/**
+ * Tiles a 16-beat excerpt every 16 beats to fill `bars`, dropping notes at/after
+ * bars*BEATS_PER_BAR (so bars<4 truncates the excerpt; bars=8 repeats it twice).
+ */
+function buildDojoExcerpt(
+  excerpt: readonly (readonly number[])[],
+  bars: number,
+): PracticePatternNote[] {
+  const notes: PracticePatternNote[] = [];
+  const maxBeat = bars * BEATS_PER_BAR;
+  for (let tileStart = 0; tileStart < maxBeat; tileStart += DOJO_EXCERPT_BEATS) {
+    for (let beat = 0; beat < excerpt.length; beat++) {
+      const absBeat = tileStart + beat;
+      if (absBeat >= maxBeat) break; // beat is increasing, so every later beat is out too
+      const lanes = excerpt[beat];
+      if (lanes === undefined) continue;
+      for (const lane of lanes) notes.push({ beat: absBeat, lane });
+    }
+  }
+  return sortNotes(notes);
+}
+
+function buildDojoChords(bars: number): PracticePatternNote[] {
+  return buildDojoExcerpt(DOJO_CHORDS_EXCERPT, bars);
+}
+
+function buildDojoScratch(bars: number): PracticePatternNote[] {
+  return buildDojoExcerpt(DOJO_SCRATCH_EXCERPT, bars);
+}
+
 export const PRACTICE_PRESETS: readonly PracticePreset[] = [
   { key: 'trill', name: 'Trill (1-2 16ths)', build: buildTrill },
   { key: 'stairs', name: 'Staircase (1→7→1 16ths)', build: buildStairs },
   { key: 'chords', name: 'Chords (quarter 2-note)', build: buildChords },
   { key: 'scratch-keys', name: 'Scratch + keys', build: buildScratchKeys },
+  { key: 'dojo-chords', name: 'DOJO-A CHORDS 282', build: buildDojoChords, bpm: 282 },
+  { key: 'dojo-scratch', name: 'DOJO-C SCRATCH 282', build: buildDojoScratch, bpm: 282 },
 ];

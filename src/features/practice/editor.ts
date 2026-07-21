@@ -273,6 +273,12 @@ export function createPracticeEditor(opts: PracticeEditorOptions): PracticeEdito
       return;
     }
     pattern = { ...pattern, notes: sortNotes(preset.build(pattern.bars)) };
+    if (preset.bpm !== undefined) {
+      // Excerpt presets only make sense at their source tempo (practice-song-content.md
+      // SHOULD 14) — apply it the same way a manual BPM edit does, so the input stays in sync.
+      pattern = setBpm(pattern, preset.bpm);
+      bpmInput.value = String(pattern.bpm);
+    }
     renderCells();
     setStatus(`preset applied: ${preset.name}`);
   }

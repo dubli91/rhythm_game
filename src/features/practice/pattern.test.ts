@@ -257,12 +257,14 @@ describe('PRACTICE_PRESETS', () => {
     };
   }
 
-  it('covers exactly the four documented presets', () => {
+  it('covers exactly the six documented presets', () => {
     expect(PRACTICE_PRESETS.map((p) => p.key)).toEqual([
       'trill',
       'stairs',
       'chords',
       'scratch-keys',
+      'dojo-chords',
+      'dojo-scratch',
     ]);
   });
 
@@ -305,5 +307,53 @@ describe('PRACTICE_PRESETS', () => {
     for (let bar = 0; bar < bars; bar++) {
       expect(notes).toContainEqual({ beat: bar * 4, lane: LANE_SCRATCH });
     }
+  });
+
+  describe('dojo-chords / dojo-scratch (practice-song-content.md SHOULD 14)', () => {
+    const dojoChords = PRACTICE_PRESETS.find((p) => p.key === 'dojo-chords');
+    const dojoScratch = PRACTICE_PRESETS.find((p) => p.key === 'dojo-scratch');
+
+    function lanesAtBeat(notes: PracticePatternNote[], beat: number): number[] {
+      return notes
+        .filter((n) => n.beat === beat)
+        .map((n) => n.lane)
+        .sort((a, b) => a - b);
+    }
+
+    it('dojo-chords build(4) reproduces the A-section excerpt exactly (43 notes)', () => {
+      const notes = dojoChords?.build(4) ?? [];
+      expect(notes.length).toBe(43);
+      expect(lanesAtBeat(notes, 0)).toEqual([0, 1, 3, 5]);
+      expect(lanesAtBeat(notes, 15)).toEqual([1, 3, 5, 7]);
+    });
+
+    it('dojo-scratch build(4) reproduces the C-section excerpt exactly (51 notes), scratch+chord simultaneity', () => {
+      const notes = dojoScratch?.build(4) ?? [];
+      expect(notes.length).toBe(51);
+      expect(lanesAtBeat(notes, 3)).toEqual([0, 1, 4, 7]);
+    });
+
+    it('tiles the 16-beat excerpt every 16 beats for larger bar counts', () => {
+      const four = dojoChords?.build(4) ?? [];
+      const eight = dojoChords?.build(8) ?? [];
+      expect(eight.length).toBe(four.length * 2);
+      const secondTile = eight.filter((n) => n.beat >= 16);
+      expect(secondTile.length).toBe(four.length);
+      expect(secondTile.map((n) => ({ beat: n.beat - 16, lane: n.lane }))).toEqual(four);
+    });
+
+    it('truncates the excerpt, keeping only beats before bars*4', () => {
+      const notes = dojoChords?.build(2) ?? [];
+      expect(notes.length).toBeGreaterThan(0);
+      expect(notes.every((n) => n.beat < 8)).toBe(true);
+    });
+
+    it('carries the source tempo (bpm 282); other presets leave bpm unset', () => {
+      expect(dojoChords?.bpm).toBe(282);
+      expect(dojoScratch?.bpm).toBe(282);
+      for (const key of ['trill', 'stairs', 'chords', 'scratch-keys']) {
+        expect(PRACTICE_PRESETS.find((p) => p.key === key)?.bpm).toBeUndefined();
+      }
+    });
   });
 });

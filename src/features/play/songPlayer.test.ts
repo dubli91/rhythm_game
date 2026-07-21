@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BufferSourceLike, FetchLike, GainNodeLike, SongAudioContextLike } from './songPlayer';
-import { DEFAULT_LEAD_IN_SEC, STOP_FADE_MS, createSongPlayer } from './songPlayer';
+import {
+  DEFAULT_LEAD_IN_SEC,
+  STOP_FADE_MS,
+  createSilentPlayback,
+  createSongPlayer,
+} from './songPlayer';
 
 /** Records gain automation calls; stands in for a real AudioParam. */
 class StubGainParam {
@@ -324,6 +329,62 @@ describe('loadFromUrl', () => {
     await expect(player.loadFromUrl('/songs/missing.wav', fetchFn)).rejects.toThrow(
       /\/songs\/missing\.wav.*404/,
     );
+  });
+});
+
+describe('createSilentPlayback', () => {
+  it('t0 = ctx.currentTime + default lead-in when no leadInSec given', () => {
+    const playback = createSilentPlayback({ currentTime: 10 });
+
+    expect(playback.t0).toBe(10 + DEFAULT_LEAD_IN_SEC);
+  });
+
+  it('t0 = ctx.currentTime + custom leadInSec when given', () => {
+    const playback = createSilentPlayback({ currentTime: 5 }, { leadInSec: 2.5 });
+
+    expect(playback.t0).toBe(7.5);
+  });
+
+  it('isActive() is true before stop() and false after', async () => {
+    const playback = createSilentPlayback({ currentTime: 0 });
+
+    expect(playback.isActive()).toBe(true);
+
+    await playback.stop();
+
+    expect(playback.isActive()).toBe(false);
+  });
+
+  it('stop() resolves ended (nothing audible to fade)', async () => {
+    const playback = createSilentPlayback({ currentTime: 0 });
+
+    void playback.stop();
+
+    await expect(playback.ended).resolves.toBeUndefined();
+  });
+
+  it('stop() is idempotent: a second call returns the same promise', () => {
+    const playback = createSilentPlayback({ currentTime: 0 });
+
+    const first = playback.stop();
+    const second = playback.stop();
+
+    expect(second).toBe(first);
+  });
+
+  it('ended resolves exactly once across repeated stop() calls', async () => {
+    const playback = createSilentPlayback({ currentTime: 0 });
+    let resolveCount = 0;
+    playback.ended.then(() => {
+      resolveCount++;
+    });
+
+    await playback.stop();
+    await playback.stop();
+    await playback.ended;
+    await Promise.resolve(); // flush any pending .then callbacks
+
+    expect(resolveCount).toBe(1);
   });
 });
 

@@ -156,3 +156,47 @@ export function createSongPlayer(ctx: SongAudioContextLike, musicBus: GainNodeLi
 
   return { loadFromUrl, loadFromBlob, play };
 }
+
+/**
+ * No-BGM master-clock playback (specs/practice-song-content.md MUST 9): the
+ * declared exception to this module's header comment and audio-playback.md
+ * MUST 2's single-source-node rule — there is no AudioBufferSourceNode at
+ * all, just the t0 reservation (MUST 3) so the rest of the play path's
+ * songTimeMs conversion (MUST 5) works unmodified. There is nothing audible
+ * to fade or an onended to await, so isActive()/ended are driven entirely by
+ * stop(): natural end-of-song is detected by the controller from chart time
+ * (last note + 2s), which then calls stop() exactly like the BGM path.
+ */
+export function createSilentPlayback(
+  ctx: { currentTime: number },
+  opts?: { leadInSec?: number },
+): SongPlayback {
+  const leadInSec = opts?.leadInSec ?? DEFAULT_LEAD_IN_SEC;
+  const t0 = ctx.currentTime + leadInSec;
+
+  let active = true;
+  let stopPromise: Promise<void> | undefined;
+  let resolveEnded: () => void;
+  const ended = new Promise<void>((resolve) => {
+    resolveEnded = resolve;
+  });
+
+  // fadeMs accepted for interface parity with the BGM path; there is no
+  // source/gain node here to ramp, so it's unused and a no-op.
+  function stop(_stopOpts?: { fadeMs?: number }): Promise<void> {
+    if (stopPromise) {
+      return stopPromise;
+    }
+    active = false;
+    resolveEnded();
+    stopPromise = ended;
+    return stopPromise;
+  }
+
+  return {
+    t0,
+    ended,
+    stop,
+    isActive: () => active,
+  };
+}
