@@ -39,13 +39,61 @@ describe('songTimeMs', () => {
 
 describe('eventTimeToSongTimeMs', () => {
   it('derives skew from getOutputTimestamp when it reports a usable contextTime', () => {
+    // Sync sources imply skew 2.04 − 5 = −2.96; the output timestamp implies
+    // −3.0, i.e. a 40ms output latency — plausible, so the OUTPUT skew wins
+    // (the fallback would have produced 1540, not 1500).
     const sources = makeSources({
+      ctxNow: () => 2.04,
+      performanceNow: () => 5000,
       getOutputTimestamp: () => ({ contextTime: 2.0, performanceTime: 5000 }),
     });
     const clock = createSongClock(sources);
     clock.start(1.0);
 
     // skew = 2.0 - 5000/1000 = -3.0; eventCtxSec = 5500/1000 - 3.0 = 2.5; (2.5-1.0)*1000 = 1500
+    expect(clock.eventTimeToSongTimeMs(5500)).toBe(1500);
+  });
+
+  it('rejects a stalled output timestamp (implausibly large implied latency)', () => {
+    // A headless/no-sink output pipeline: currentTime marches on (sync skew
+    // −2.96) while the output timestamp has fallen ~1s behind (skew −4.0).
+    // Implied latency 1.04s is no real device — the sync fallback must win,
+    // else every input event maps ~1s early and nothing is ever judged.
+    const sources = makeSources({
+      ctxNow: () => 2.04,
+      performanceNow: () => 5000,
+      getOutputTimestamp: () => ({ contextTime: 1.0, performanceTime: 5000 }),
+    });
+    const clock = createSongClock(sources);
+    clock.start(1.0);
+
+    // fallback skew = 2.04 - 5.0 = -2.96; eventCtxSec = 5.5 - 2.96 = 2.54 -> 1540
+    expect(clock.eventTimeToSongTimeMs(5500)).toBe(1540);
+  });
+
+  it('rejects an output timestamp AHEAD of the sync correspondence (negative latency)', () => {
+    // Output cannot lead currentTime; beyond small jitter this is garbage.
+    const sources = makeSources({
+      ctxNow: () => 2.04,
+      performanceNow: () => 5000,
+      getOutputTimestamp: () => ({ contextTime: 2.5, performanceTime: 5000 }),
+    });
+    const clock = createSongClock(sources);
+    clock.start(1.0);
+
+    expect(clock.eventTimeToSongTimeMs(5500)).toBe(1540);
+  });
+
+  it('accepts a large-but-real Bluetooth-class output latency (300ms)', () => {
+    const sources = makeSources({
+      ctxNow: () => 2.3,
+      performanceNow: () => 5000,
+      getOutputTimestamp: () => ({ contextTime: 2.0, performanceTime: 5000 }),
+    });
+    const clock = createSongClock(sources);
+    clock.start(1.0);
+
+    // output skew −3.0 accepted (implied latency 0.3s) -> 1500, not the fallback 1800.
     expect(clock.eventTimeToSongTimeMs(5500)).toBe(1500);
   });
 
@@ -95,10 +143,12 @@ describe('eventTimeToSongTimeMs', () => {
   });
 
   it('caches skew across calls; only recalibrate() picks up a new correspondence', () => {
+    let ctxNow = 2.04;
     let contextTime = 2.0;
-    let performanceTime = 5000;
     const sources = makeSources({
-      getOutputTimestamp: () => ({ contextTime, performanceTime }),
+      ctxNow: () => ctxNow,
+      performanceNow: () => 5000,
+      getOutputTimestamp: () => ({ contextTime, performanceTime: 5000 }),
     });
     const clock = createSongClock(sources);
     clock.start(1.0);
@@ -106,8 +156,8 @@ describe('eventTimeToSongTimeMs', () => {
     expect(clock.eventTimeToSongTimeMs(5500)).toBe(1500);
 
     // Mutate the correspondence after first use; cached skew must still apply.
+    ctxNow = 10.04;
     contextTime = 10.0;
-    performanceTime = 5000;
     expect(clock.eventTimeToSongTimeMs(5500)).toBe(1500);
 
     clock.recalibrate();

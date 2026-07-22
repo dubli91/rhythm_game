@@ -4,6 +4,21 @@
 
 import type { DjRank, JudgementEvent, JudgementGrade } from './types';
 
+// δ histogram buckets (judgement-scoring.md SHOULD 13): 15 × 10ms covering ±75ms —
+// wide enough that the whole GREAT window (±33.3ms) plus most GOODs land in
+// distinct buckets, narrow enough that a one-character-per-bucket sparkline
+// still reads at a glance. Outliers clamp into the edge buckets, so those two
+// mean "≤ −65ms" / "≥ +65ms" rather than an exact 10ms range. Lives in the
+// scorer so song play and practice (one Scorer per loop) share one accumulator.
+export const DELTA_HISTOGRAM_BUCKET_MS = 10;
+export const DELTA_HISTOGRAM_BUCKETS = 15;
+const DELTA_HISTOGRAM_HALF_RANGE_MS = (DELTA_HISTOGRAM_BUCKETS * DELTA_HISTOGRAM_BUCKET_MS) / 2;
+
+function deltaBucketIndex(deltaMs: number): number {
+  const index = Math.floor((deltaMs + DELTA_HISTOGRAM_HALF_RANGE_MS) / DELTA_HISTOGRAM_BUCKET_MS);
+  return Math.max(0, Math.min(DELTA_HISTOGRAM_BUCKETS - 1, index));
+}
+
 export interface ScoreSummary {
   // counts.POOR = missPoor count ONLY; empty poors are tracked separately in emptyPoorCount.
   counts: Record<JudgementGrade, number>;
@@ -21,6 +36,10 @@ export interface ScoreSummary {
    *  (results-records.md MUST 13) but never persisted into records. */
   fastCount: number;
   slowCount: number;
+  /** δ distribution over timed hits (judgement-scoring.md SHOULD 13): per-bucket
+   *  counts, index 0 = earliest (≤ −65ms), center = on time. Display-only —
+   *  results screen + practice HUD; never persisted into records. */
+  deltaHistogram: readonly number[];
   // BP = BAD + missPoor POOR + emptyPoor + cnBreak (empty poors count toward BP per IIDX).
   bp: number;
   djRank: DjRank;
@@ -69,6 +88,7 @@ export function createScorer(totalNotes: number): Scorer {
   let cnBreakCount = 0;
   let fastCount = 0;
   let slowCount = 0;
+  const deltaHistogram = new Array<number>(DELTA_HISTOGRAM_BUCKETS).fill(0);
   let combo = 0;
   let maxCombo = 0;
   let judgedNotes = 0;
@@ -106,6 +126,12 @@ export function createScorer(totalNotes: number): Scorer {
     // excluded by construction.
     if (event.timing === 'FAST') fastCount++;
     else if (event.timing === 'SLOW') slowCount++;
+    // δ histogram (judgement-scoring.md SHOULD 13): every timed hit buckets by
+    // its signed δ; non-hit kinds carry deltaMs null and returned above.
+    if (event.deltaMs !== null) {
+      const bucket = deltaBucketIndex(event.deltaMs);
+      deltaHistogram[bucket] = (deltaHistogram[bucket] ?? 0) + 1;
+    }
     if (event.grade === 'BAD') {
       combo = 0;
     } else {
@@ -129,6 +155,7 @@ export function createScorer(totalNotes: number): Scorer {
       cnBreakCount,
       fastCount,
       slowCount,
+      deltaHistogram: [...deltaHistogram],
       combo,
       maxCombo,
       exScore,
@@ -144,4 +171,25 @@ export function createScorer(totalNotes: number): Scorer {
   }
 
   return { apply, snapshot };
+}
+
+// One sparkline column per bucket, 8 levels. Any non-zero bucket renders at
+// least ▁ so a single stray hit stays visible next to a tall peak.
+const SPARK_LEVELS = ' ▁▂▃▄▅▆▇█';
+
+/** δ distribution sparkline (SHOULD 13): 'δ −75ms ▁▃█▃▁ +75ms', '' when empty.
+ *  Text-only so both the practice HUD's info Text node and the results screen
+ *  render it — the histogram needs no new canvas primitives. */
+export function formatDeltaHistogram(histogram: readonly number[]): string {
+  let max = 0;
+  for (const count of histogram) {
+    if (count > max) max = count;
+  }
+  if (max === 0) return '';
+  let bars = '';
+  for (const count of histogram) {
+    const level = count === 0 ? 0 : Math.max(1, Math.round((count / max) * 8));
+    bars += SPARK_LEVELS[level] ?? ' ';
+  }
+  return `δ −${DELTA_HISTOGRAM_HALF_RANGE_MS}ms ${bars} +${DELTA_HISTOGRAM_HALF_RANGE_MS}ms`;
 }

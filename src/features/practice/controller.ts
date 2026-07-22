@@ -43,6 +43,7 @@ import {
   formatTimingIndicator,
   lockedHiSpeedFor,
 } from './../play/render';
+import { formatDeltaHistogram } from './../play/scoring';
 import type { JudgementEvent, TimingDisplayMode } from './../play/types';
 import { MAX_PATTERN_BPM, MIN_PATTERN_BPM, type PracticePattern, sortNotes } from './pattern';
 import {
@@ -62,7 +63,6 @@ import {
   type CumulativeStats,
   type LoopStats,
   createPracticeStats,
-  formatDeltaHistogram,
   formatMeanDelta,
 } from './stats';
 

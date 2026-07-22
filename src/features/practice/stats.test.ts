@@ -7,14 +7,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { timingClassFor } from '../play/judgement';
-import type { JudgementEvent } from '../play/types';
 import {
   DELTA_HISTOGRAM_BUCKETS,
   DELTA_HISTOGRAM_BUCKET_MS,
-  createPracticeStats,
   formatDeltaHistogram,
-  formatMeanDelta,
-} from './stats';
+} from '../play/scoring';
+import type { JudgementEvent } from '../play/types';
+import { createPracticeStats, formatMeanDelta } from './stats';
 
 function hit(deltaMs: number, grade: JudgementEvent['grade'] = 'PGREAT'): JudgementEvent {
   return {

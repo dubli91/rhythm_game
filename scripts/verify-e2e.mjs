@@ -224,6 +224,14 @@ await step('abandon autoplay -> results shows EX gained + no-record note', async
   // acceptance: autoplay counts are always 0), yet the rows must still render.
   if (!grid.includes('FAST0SLOW0'))
     throw new Error(`autoplay FAST/SLOW counts should both read 0: ${grid}`);
+  // δ histogram (judgement-scoring SHOULD 13): autoplay hits land at exactly δ=0,
+  // so the sparkline is a single full-height center column (bucket 8 of 15).
+  const histogram = await page.$eval('.result-histogram', (n) => n.textContent);
+  console.log(`  histogram: ${JSON.stringify(histogram)}`);
+  if (!/^δ −75ms {8}█ {8}\+75ms$/.test(histogram))
+    throw new Error(
+      `autoplay histogram should be a lone center column: ${JSON.stringify(histogram)}`,
+    );
   await page.screenshot({ path: SHOT('7-results-autoplay') });
 });
 
@@ -1158,6 +1166,44 @@ await step(
     await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
   },
 );
+
+await step('gauge-out death: freeze + fade before FAILED results (SHOULD 15)', async () => {
+  // Autoplay is OFF from the previous step; First Light stays expanded, so
+  // KeyG (NORMAL -> HARD) then Enter starts a play nobody touches — 12 misses
+  // at HARD's −10%/−5% drain the survival gauge well before the song ends.
+  await page.keyboard.press('KeyG');
+  const bar = await page.$eval('.options-bar', (n) => n.textContent);
+  if (!bar.includes('HARD')) throw new Error(`gauge should cycle to HARD: ${bar}`);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.screen-play canvas', { timeout: 20000 });
+  // The controller mirrors the freeze onto data-death the frame the gauge dies
+  // (canvas pixels are unreadable here — same pattern as data-timing).
+  await page.waitForSelector('[data-screen="PLAY"][data-death]', { timeout: 40000 });
+  const deathAt = Date.now();
+  await page.screenshot({ path: SHOT('19-death-freeze') });
+  await page.waitForSelector('.result-status', { timeout: 8000 });
+  const holdMs = Date.now() - deathAt;
+  console.log(`  death -> results hold: ${holdMs}ms`);
+  // DEATH_HOLD_MS is 1000: the freeze+fade must actually play out (>600ms even
+  // with polling slack) but never stall the transition (<4s).
+  if (holdMs < 600 || holdMs > 4000)
+    throw new Error(`death hold outside the freeze+fade window: ${holdMs}ms`);
+  const status = await page.$eval('.result-status', (n) => n.textContent);
+  const sub = await page.$eval('.result-sub', (n) => n.textContent);
+  console.log(`  results: ${status} | ${sub}`);
+  if (status !== 'FAILED') throw new Error(`gauge-out should FAIL: ${status}`);
+  if (!sub.includes('HARD GAUGE') || !sub.includes('died at'))
+    throw new Error(`missing gauge-death markers on results sub-line: ${sub}`);
+  const grid = await page.$eval('.result-grid', (n) => n.textContent);
+  if (!grid.includes('GAUGE0.0%')) throw new Error(`final gauge should read 0.0%: ${grid}`);
+  await page.screenshot({ path: SHOT('19-death-results') });
+  // Restore NORMAL gauge (HARD -> EX_HARD -> ASSIST_EASY -> EASY -> NORMAL).
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
+  for (let i = 0; i < 4; i++) await page.keyboard.press('KeyG');
+  const restored = await page.$eval('.options-bar', (n) => n.textContent);
+  if (!restored.includes('NORMAL')) throw new Error(`gauge not restored: ${restored}`);
+});
 
 console.log('--- console messages (last 25) ---');
 for (const m of consoleMsgs.slice(-25)) console.log(m);

@@ -91,6 +91,10 @@ export interface PlayFrameView {
   /** Dev overlay block (FPS / frame / input latency), '' when hidden
    *  (playfield-rendering.md SHOULD 16, input-handling.md SHOULD 10). */
   devText?: string;
+  /** Gauge-out death fade (spec SHOULD 15): 0/absent = alive, 0..1 = full-screen
+   *  black overlay opacity. The controller owns the curve (wall clock — pure UI);
+   *  the freeze itself is the controller no longer advancing the fields above. */
+  deathFadeAlpha?: number;
 }
 
 export interface PlayfieldRenderer {
@@ -303,7 +307,7 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
   mount.appendChild(canvas);
 
   // ── Scene graph, ordered back-to-front (spec: bg < beams < CN bodies < notes < line
-  // < cover < effects < HUD). CN bodies sit under head chips so the chip reads as the
+  // < cover < effects < HUD < death fade). CN bodies sit under head chips so the chip reads as the
   // note edge; the SUDDEN+ cover must occlude notes/beams (spec MUST 11) but never the
   // HUD. Explosions (MUST 17) sit above the cover — a hit at the line must stay visible
   // at any cover height — but below the HUD so judgement text/combo keep priority.
@@ -325,6 +329,19 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     effectsContainer,
     hudContainer,
   );
+
+  // Gauge-out death fade (spec SHOULD 15): one pre-created full-screen sprite,
+  // topmost — above the HUD — so the whole frozen frame, playfield and HUD alike,
+  // sinks to black together before results.
+  const deathOverlay = new Sprite(Texture.WHITE);
+  deathOverlay.x = 0;
+  deathOverlay.y = 0;
+  deathOverlay.width = L.WIDTH;
+  deathOverlay.height = L.HEIGHT;
+  deathOverlay.tint = 0x000000;
+  deathOverlay.alpha = 0;
+  deathOverlay.visible = false;
+  app.stage.addChild(deathOverlay);
 
   // Lane backgrounds (static).
   const laneBg = new Graphics();
@@ -962,6 +979,12 @@ export async function createPlayfieldRenderer(init: PlayRenderInit): Promise<Pla
     // Progress bar.
     const p = view.progress < 0 ? 0 : view.progress > 1 ? 1 : view.progress;
     progressFill.width = L.WIDTH * p;
+
+    // Death fade (spec SHOULD 15): alpha comes straight from the controller —
+    // it changes every frame during the ramp, so no change-guard is useful.
+    const deathAlpha = view.deathFadeAlpha ?? 0;
+    deathOverlay.visible = deathAlpha > 0;
+    deathOverlay.alpha = deathAlpha;
   }
 
   function destroy(): void {

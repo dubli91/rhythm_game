@@ -28,6 +28,7 @@ import {
   timingDisplayLabel,
 } from '../features/play/options';
 import { greenNumberFor, lockedHiSpeedFor } from '../features/play/render';
+import { formatDeltaHistogram } from '../features/play/scoring';
 import { type SongAudioContextLike, createSongPlayer } from '../features/play/songPlayer';
 import {
   type Arrangement,
@@ -174,6 +175,7 @@ const STYLES = `
   .result-diff { color: #6fd0ff; font-size: 12px; letter-spacing: 0.02em; }
   .new-record { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #241a00; background: #ffcc33; border-radius: 3px; padding: 2px 6px; text-shadow: none; }
   .result-rank { font-size: 64px; font-weight: 800; color: #ffe066; margin: 10px 0 20px; }
+  .result-histogram { margin-top: 14px; color: #6fd0ff; font-size: 15px; letter-spacing: 0.08em; }
   .practice-status { min-height: 18px; color: #ffe066; font-size: 13px; margin-bottom: 10px; }
   .practice-controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 10px; }
   .practice-controls label { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #8a8aa8; letter-spacing: 0.08em; }
@@ -1106,6 +1108,10 @@ export function bootShell(root: HTMLElement): void {
     addRow('FULL COMBO', result.score.fullCombo ? 'YES' : 'no');
 
     resultsEl.appendChild(grid);
+    // δ distribution sparkline (judgement-scoring.md SHOULD 13): same formatter
+    // as the practice HUD; empty (no timed hits) renders nothing.
+    const histogram = formatDeltaHistogram(result.score.deltaHistogram);
+    if (histogram !== '') resultsEl.appendChild(el('div', 'result-histogram', histogram));
     resultsEl.appendChild(el('div', 'hint', 'ENTER retry · ESC back to select'));
   }
 

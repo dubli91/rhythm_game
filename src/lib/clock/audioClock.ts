@@ -37,6 +37,17 @@ const MAX_GLOBAL_OFFSET_MS = 200;
 /** Number of same-tick samples used to median-guard the fallback perf↔ctx skew. */
 const FALLBACK_SAMPLE_COUNT = 5;
 
+/** Plausibility window (seconds) for the output latency implied by a
+ * getOutputTimestamp() reading, i.e. fallbackSkew − outputSkew. On real
+ * hardware this is the device latency: ≈0 wired, up to ~0.3s on Bluetooth,
+ * never negative. A stalled output pipeline (headless browser, missing audio
+ * sink) keeps advancing currentTime while the output timestamp falls ever
+ * further behind — trusting it there maps every input event seconds off song
+ * time (observed: ~140ms of spurious skew per second of context life in
+ * headless Chromium, which silently un-judges all real input). */
+const MAX_PLAUSIBLE_OUTPUT_LATENCY_SEC = 0.35;
+const MIN_PLAUSIBLE_OUTPUT_LATENCY_SEC = -0.02;
+
 /** Clamp to [-200, 200] (specs/audio-playback.md MUST 7). */
 export function clampGlobalOffsetMs(ms: number): number {
   return Math.min(MAX_GLOBAL_OFFSET_MS, Math.max(MIN_GLOBAL_OFFSET_MS, ms));
@@ -65,10 +76,15 @@ function sampleFallbackSkewSec(sources: ClockSources): number {
 
 /**
  * Resolves perfToCtxSkewSec = ctxTime − perfTimeMs/1000 for the current instant: prefers
- * getOutputTimestamp() when it reports a usable (finite, positive contextTime) reading,
- * otherwise falls back to median-sampled sync reads.
+ * getOutputTimestamp() when it reports a usable (finite, positive contextTime) reading
+ * whose implied output latency vs the sync-sampled skew is plausible, otherwise falls
+ * back to the median-sampled sync reads. The output-based skew is the better mapping
+ * when trustworthy — inputs then get judged against the audio the player actually
+ * hears — but only the sync sample can tell a legit device latency from a runaway
+ * output clock.
  */
 function calibrateSkewSec(sources: ClockSources): number {
+  const fallbackSkewSec = sampleFallbackSkewSec(sources);
   const getOutputTimestamp = sources.getOutputTimestamp;
   if (getOutputTimestamp) {
     const timestamp = getOutputTimestamp();
@@ -81,10 +97,17 @@ function calibrateSkewSec(sources: ClockSources): number {
       Number.isFinite(performanceTime) &&
       contextTime > 0
     ) {
-      return contextTime - performanceTime / 1000;
+      const outputSkewSec = contextTime - performanceTime / 1000;
+      const impliedLatencySec = fallbackSkewSec - outputSkewSec;
+      if (
+        impliedLatencySec >= MIN_PLAUSIBLE_OUTPUT_LATENCY_SEC &&
+        impliedLatencySec <= MAX_PLAUSIBLE_OUTPUT_LATENCY_SEC
+      ) {
+        return outputSkewSec;
+      }
     }
   }
-  return sampleFallbackSkewSec(sources);
+  return fallbackSkewSec;
 }
 
 export function createSongClock(

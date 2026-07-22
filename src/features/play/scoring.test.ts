@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type JudgeNote, createJudge, timingClassFor } from './judgement';
-import { createScorer, djRankFor } from './scoring';
+import { DELTA_HISTOGRAM_BUCKETS, createScorer, djRankFor, formatDeltaHistogram } from './scoring';
 import type { JudgementEvent } from './types';
 
 // timing derives via timingClassFor (the judge's own classifier) so these
@@ -401,5 +401,66 @@ describe('createScorer — FAST/SLOW aggregation (judgement-scoring.md MUST 16)'
     expect(snap.counts.GREAT).toBe(1);
     expect(snap.fastCount).toBe(1);
     expect(snap.slowCount).toBe(0);
+  });
+});
+
+// The scorer owns the accumulator (single source with practice, which wraps one
+// Scorer per loop); the bucket-boundary rules themselves are pinned exhaustively
+// in practice/stats.test.ts and apply unchanged here.
+describe('createScorer — δ histogram (judgement-scoring.md SHOULD 13)', () => {
+  const CENTER = Math.floor(DELTA_HISTOGRAM_BUCKETS / 2);
+
+  it('buckets every timed hit by signed δ, PGREATs included', () => {
+    const scorer = createScorer(3);
+    scorer.apply(hit('PGREAT', 0, 1, 0, 0)); // center [−5, +5)
+    scorer.apply(hit('GREAT', 1, 1, 0, -20)); // center − 2 ([−25, −15))
+    scorer.apply(hit('GOOD', 2, 1, 0, 40)); // center + 4 ([+35, +45))
+    const snap = scorer.snapshot();
+    expect(snap.deltaHistogram).toHaveLength(DELTA_HISTOGRAM_BUCKETS);
+    expect(snap.deltaHistogram[CENTER]).toBe(1);
+    expect(snap.deltaHistogram[CENTER - 2]).toBe(1);
+    expect(snap.deltaHistogram[CENTER + 4]).toBe(1);
+    expect(snap.deltaHistogram.reduce((a, b) => a + b, 0)).toBe(3);
+  });
+
+  it('clamps outliers into the edge buckets instead of dropping them', () => {
+    const scorer = createScorer(2);
+    scorer.apply(hit('BAD', 0, 1, 0, -240));
+    scorer.apply(hit('BAD', 1, 1, 0, 240));
+    const snap = scorer.snapshot();
+    expect(snap.deltaHistogram[0]).toBe(1);
+    expect(snap.deltaHistogram[DELTA_HISTOGRAM_BUCKETS - 1]).toBe(1);
+  });
+
+  it('ignores non-hit kinds (no δ to bucket)', () => {
+    const scorer = createScorer(2);
+    scorer.apply(missPoor(0));
+    scorer.apply(emptyPoor());
+    scorer.apply(hit('PGREAT', 1)); // CN head
+    scorer.apply(cnBreak(1));
+    scorer.apply(cnComplete(1));
+    const snap = scorer.snapshot();
+    expect(snap.deltaHistogram.reduce((a, b) => a + b, 0)).toBe(1);
+  });
+
+  it('snapshot copies are isolated from later hits', () => {
+    const scorer = createScorer(2);
+    scorer.apply(hit('PGREAT', 0, 1, 0, 0));
+    const before = scorer.snapshot();
+    scorer.apply(hit('PGREAT', 1, 1, 0, 0));
+    expect(before.deltaHistogram[CENTER]).toBe(1);
+    expect(scorer.snapshot().deltaHistogram[CENTER]).toBe(2);
+  });
+});
+
+describe('formatDeltaHistogram', () => {
+  it('is empty for an all-zero histogram and renders ±75ms bounds otherwise', () => {
+    expect(formatDeltaHistogram(new Array<number>(DELTA_HISTOGRAM_BUCKETS).fill(0))).toBe('');
+    const scorer = createScorer(1);
+    scorer.apply(hit('PGREAT', 0, 1, 0, 0));
+    const line = formatDeltaHistogram(scorer.snapshot().deltaHistogram);
+    expect(line.startsWith('δ −75ms ')).toBe(true);
+    expect(line.endsWith(' +75ms')).toBe(true);
+    expect(line).toContain('█');
   });
 });

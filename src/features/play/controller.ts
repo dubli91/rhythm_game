@@ -122,6 +122,14 @@ const AUTOPLAY_BEAM_MS = 90;
 const RESULT_DELAY_MS = 300;
 /** How long an option change (hi-speed / SUDDEN+) stays on screen (play-options.md MUST 3). */
 const OPTION_FLASH_MS = 800;
+/** Gauge-out death presentation (playfield-rendering.md SHOULD 15): the playfield
+ *  freezes on the frame that detected the death, holds briefly, then a full-screen
+ *  black fade covers it before results. Wall-clock driven like the option flash —
+ *  pure UI; the audio clock stays reserved for song time. The 300ms audio fade
+ *  runs concurrently inside DEATH_HOLD_MS, so death→results totals ~1s. */
+const DEATH_FADE_DELAY_MS = 180;
+const DEATH_FADE_MS = 700;
+const DEATH_HOLD_MS = 1000;
 
 function bpmAtBeat(chart: Chart, beat: number): number {
   let bpm = chart.bpm.init;
@@ -227,6 +235,9 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   // the audio clock stays reserved for anything that touches judgement.
   let optionFlashText = '';
   let optionFlashUntilMs = 0;
+  /** Wall-clock ms when a gauge-out death froze the playfield; null = alive.
+   *  Survival gauges only — recovery gauges cannot die mid-song (gauge.ts). */
+  let deathWallStartMs: number | null = null;
   // Dev overlay (SHOULD 16 / input-handling SHOULD 10): metrics are per-session,
   // visibility is page-global (survives retries). Mirrored onto the mount's
   // dataset because e2e cannot read canvas text.
@@ -257,6 +268,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     suddenPlusEnabled: suddenEnabled,
     suddenPlusCover: suddenCover,
     optionFlashText: '',
+    deathFadeAlpha: 0,
   };
 
   function dispatch(event: JudgementEvent): void {
@@ -371,6 +383,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     delete opts.mount.dataset.devOverlay;
     delete opts.mount.dataset.green;
     delete opts.mount.dataset.timing;
+    delete opts.mount.dataset.death;
   }
 
   function buildResult(endProgress: number, finishedSong: boolean): PlayResult {
@@ -409,11 +422,29 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
       ? 1
       : Math.min(1, Math.max(0, clockSafeTime() / durationMs));
     const finishedSong = cause.completed === true;
+    if (cause.failed === true) {
+      // Death freeze (playfield-rendering.md SHOULD 15): frame() stops refreshing
+      // song-time view fields from this point and only animates the fade. Mirrored
+      // onto the mount for e2e — canvas pixels are unreadable there.
+      deathWallStartMs = performance.now();
+      opts.mount.dataset.death = '1';
+    }
     // Fade-out-then-stop is the single stop path for abandon/fail/natural end alike
     // (audio-playback.md MUST 4; natural end has nothing left to fade).
     void playback.stop().then(() => {
-      cleanup();
-      opts.onFinished(buildResult(endProgress, finishedSong));
+      const finish = (): void => {
+        cleanup();
+        opts.onFinished(buildResult(endProgress, finishedSong));
+      };
+      if (deathWallStartMs === null) {
+        finish();
+        return;
+      }
+      // Let the death freeze+fade play out fully before results (the 300ms audio
+      // fade already elapsed inside stop(), concurrent with the hold).
+      const remainingMs = DEATH_HOLD_MS - (performance.now() - deathWallStartMs);
+      if (remainingMs > 0) window.setTimeout(finish, remainingMs);
+      else finish();
     });
   }
 
@@ -423,6 +454,16 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     } catch {
       return 0;
     }
+  }
+
+  /** 0 until DEATH_FADE_DELAY_MS after the death, then a linear ramp to full
+   *  black over DEATH_FADE_MS. Pure function of wall-clock age, like the
+   *  explosion curve — a dropped frame just samples it later. */
+  function deathFadeAlphaAt(nowMs: number): number {
+    if (deathWallStartMs === null) return 0;
+    const fadeAge = nowMs - deathWallStartMs - DEATH_FADE_DELAY_MS;
+    if (fadeAge <= 0) return 0;
+    return Math.min(1, fadeAge / DEATH_FADE_MS);
   }
 
   playback.ended.then(() => {
@@ -437,6 +478,10 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     if (!running) return;
     devOverlay.frameTick(performance.now());
     const t = clockSafeTime();
+    // Death freeze (SHOULD 15): sample BEFORE judging so the frame that detects
+    // the death still populates the view once — the fatal judgement and the 0%
+    // gauge land on screen and stay there, frozen; later frames only fade.
+    const frozenAtFrameStart = deathWallStartMs !== null;
 
     if (!ending) {
       if (autoplay) {
@@ -470,6 +515,15 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
         // Belt-and-braces: ended promise should have fired already.
         endSession({ completed: true });
       }
+    }
+
+    if (frozenAtFrameStart) {
+      // Frozen playfield: every song-time-driven view field keeps its death-frame
+      // value; only the fade overlay animates (wall clock — pure UI).
+      view.deathFadeAlpha = deathFadeAlphaAt(performance.now());
+      renderer.update(view);
+      rafId = requestAnimationFrame(frame);
+      return;
     }
 
     const beat = timingIndex.msToBeat(t);

@@ -26,7 +26,7 @@
 5. 곡 시간 변환 함수를 제공한다:
    `songTimeMs = (ctx.currentTime − t0) × 1000 − 전역오프셋 + 곡별오프셋`.
    판정·렌더링·연습 모드가 모두 이 함수만 사용한다.
-6. 입력 이벤트의 `performance.now` 시각을 곡 시간으로 변환하는 함수를 제공한다. `ctx.currentTime`과 `performance.now`의 대응은 `ctx.getOutputTimestamp()`(미지원 시 보정 샘플링)로 유지한다. 입력 판정([judgement-scoring](judgement-scoring.md))은 이 변환을 통해 이벤트 시각 기준으로 이뤄진다.
+6. 입력 이벤트의 `performance.now` 시각을 곡 시간으로 변환하는 함수를 제공한다. `ctx.currentTime`과 `performance.now`의 대응은 `ctx.getOutputTimestamp()`(미지원 시 보정 샘플링)로 유지한다. 단, `getOutputTimestamp()` 판독값은 동기 샘플 대비 함의된 출력 지연이 실제 기기 범위(약 −20ms ~ +350ms)일 때만 신뢰한다 — 출력 파이프라인이 멈춘 환경(헤드리스 브라우저, 오디오 싱크 부재)에서는 출력 타임스탬프가 `currentTime`보다 무한히 뒤처져, 이를 그대로 쓰면 모든 입력이 곡 시간에서 수 초 어긋나 판정 불능이 된다. 범위를 벗어나면 보정 샘플링 값으로 대체한다. 입력 판정([judgement-scoring](judgement-scoring.md))은 이 변환을 통해 이벤트 시각 기준으로 이뤄진다.
 7. 전역 오프셋(판정 보정값): 설정에서 −200 ~ +200ms 조정 가능, localStorage 저장.
 
 ### 효과음 — MUST
