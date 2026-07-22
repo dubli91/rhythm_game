@@ -387,18 +387,3 @@ describe('createSilentPlayback', () => {
     expect(resolveCount).toBe(1);
   });
 });
-
-describe('loadFromBlob', () => {
-  it('decodes via blob.arrayBuffer()', async () => {
-    const ctx = new StubSongAudioContext();
-    const musicBus = new StubGainNode();
-    const player = createSongPlayer(ctx, musicBus);
-    const bytes = new ArrayBuffer(8);
-    const blob = { arrayBuffer: () => Promise.resolve(bytes) } as unknown as Blob;
-
-    const result = await player.loadFromBlob(blob);
-
-    expect(ctx.decodeAudioDataCalls).toEqual([bytes]);
-    expect(result).toBe(ctx.decodedBuffer);
-  });
-});

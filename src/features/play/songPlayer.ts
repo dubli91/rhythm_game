@@ -65,8 +65,6 @@ export interface SongPlayback {
 export interface SongPlayer {
   /** Fetches and decodes a built-in song's audio. Throws if the response is not ok. */
   loadFromUrl(url: string, fetchFn?: FetchLike): Promise<AudioBuffer>;
-  /** Decodes an imported song's audio from an IndexedDB-stored Blob. */
-  loadFromBlob(blob: Blob): Promise<AudioBuffer>;
   /** Schedules a single AudioBufferSourceNode to play `buffer` starting after a lead-in. */
   play(buffer: AudioBuffer, opts?: { leadInSec?: number }): SongPlayback;
 }
@@ -81,11 +79,6 @@ export function createSongPlayer(ctx: SongAudioContextLike, musicBus: GainNodeLi
       throw new Error(`Failed to fetch song audio from ${url}: HTTP ${response.status}`);
     }
     const data = await response.arrayBuffer();
-    return ctx.decodeAudioData(data);
-  }
-
-  async function loadFromBlob(blob: Blob): Promise<AudioBuffer> {
-    const data = await blob.arrayBuffer();
     return ctx.decodeAudioData(data);
   }
 
@@ -154,7 +147,7 @@ export function createSongPlayer(ctx: SongAudioContextLike, musicBus: GainNodeLi
     };
   }
 
-  return { loadFromUrl, loadFromBlob, play };
+  return { loadFromUrl, play };
 }
 
 /**

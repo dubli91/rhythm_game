@@ -298,7 +298,7 @@ export function addSustainedPad(left, right, opts) {
   }
 }
 
-// --- peak normalize to -1dBFS, matching src/lib/audio/wav.ts convention ----------
+// --- peak normalize to -1dBFS ----------------------------------------------------
 
 export const TARGET_PEAK_LINEAR = 10 ** (-1 / 20);
 

@@ -409,10 +409,10 @@ function validateAudio(raw: unknown, base: string, issues: ValidationIssue[]): v
   }
 
   const source = raw.source;
-  if (source !== 'builtin' && source !== 'imported') {
+  if (source !== 'builtin') {
     issues.push({
       path: joinPath(base, 'source'),
-      message: "audio.source must be 'builtin' or 'imported'",
+      message: "audio.source must be 'builtin'",
     });
   }
 

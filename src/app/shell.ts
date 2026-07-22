@@ -134,7 +134,6 @@ const STYLES = `
   .song-list .title { font-size: 17px; }
   .song-list .meta { color: #8a8aa8; font-size: 13px; }
   .song-list .diff { font-weight: 700; font-size: 13px; padding: 1px 8px; border-radius: 3px; }
-  .source-badge { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: #55557a; border: 1px solid #2a2a44; border-radius: 3px; padding: 1px 6px; }
   .record { margin-left: auto; display: flex; gap: 10px; align-items: baseline; font-size: 13px; color: #8a8aa8; }
   .lamp { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; border-radius: 3px; padding: 2px 7px; background: #1c1c2e; }
   .lamp-NO_PLAY { color: #55557a; }
@@ -468,14 +467,14 @@ export function bootShell(root: HTMLElement): void {
   let db: IDBDatabase | null = null;
   let bootError: string | null = null;
   const bootstrap = (async () => {
-    // Imported songs live in IndexedDB; a broken/unavailable IDB must degrade to
-    // built-ins only, never block boot (song-library.md MUST 6/8).
+    // IndexedDB only holds practice patterns; a broken/unavailable IDB must
+    // degrade (practice save/load disabled), never block boot.
     try {
       db = await openDatabase();
     } catch (err) {
-      console.error('IndexedDB unavailable; imported songs will be missing', err);
+      console.error('IndexedDB unavailable; practice pattern save/load will be missing', err);
     }
-    library = await loadLibrary({ db });
+    library = await loadLibrary();
     bootNote.textContent = `${library.entries.length} song(s) ready`;
   })().catch((err: unknown) => {
     bootError = err instanceof Error ? err.message : String(err);
@@ -592,8 +591,8 @@ export function bootShell(root: HTMLElement): void {
     if (selectModel === null) return null;
     const row = selectModel.rows().find((r) => r.selected);
     // Chart rows inherit their song's preview; folder rows have no song and entries
-    // without preview metadata (no catalogEntry, e.g. imported songs; the keysound
-    // practice song, song-select.md SHOULD 12) stay silent.
+    // without preview metadata (the keysound practice song, song-select.md SHOULD 12)
+    // stay silent.
     const catalogEntry =
       row === undefined || row.kind === 'folder' ? undefined : row.entry.catalogEntry;
     if (catalogEntry?.preview === undefined || catalogEntry.audio === undefined) return null;
@@ -708,9 +707,6 @@ export function bootShell(root: HTMLElement): void {
             ? `${row.entry.bpm.min}`
             : `${row.entry.bpm.min}-${row.entry.bpm.max}`;
         li.appendChild(el('span', 'meta', `${row.entry.artist} · ${row.entry.genre} · BPM ${bpm}`));
-        li.appendChild(
-          el('span', 'source-badge', row.entry.source === 'builtin' ? 'BUILT-IN' : 'IMPORTED'),
-        );
       } else {
         li.appendChild(
           el(
@@ -925,9 +921,9 @@ export function bootShell(root: HTMLElement): void {
   let playBusy = false;
 
   async function loadSelected(request: PlayRequest): Promise<LoadedPlayData> {
-    // Lazy load on song decision (song-library.md MUST 2): built-in charts/audio are
-    // fetched, imported ones come from IndexedDB — loadPlayableSong hides the split.
-    const playable = await loadPlayableSong(request.entry, { db });
+    // Lazy load on song decision (song-library.md MUST 2): chart JSON + audio are
+    // only fetched here, once the song is actually chosen.
+    const playable = await loadPlayableSong(request.entry);
     const chart = playable.song.charts.find((c) => c.chartId === request.chart.chartId);
     if (chart === undefined) {
       throw new Error(`chart ${request.chart.chartId} missing from song ${playable.song.songId}`);
@@ -943,13 +939,7 @@ export function bootShell(root: HTMLElement): void {
     const audio: PlaySessionAudio =
       playable.audio.kind === 'keysound'
         ? { kind: 'keysound', buffer: await player.loadFromUrl(playable.audio.url) }
-        : {
-            kind: 'bgm',
-            buffer:
-              playable.audio.kind === 'url'
-                ? await player.loadFromUrl(playable.audio.url)
-                : await player.loadFromBlob(playable.audio.blob),
-          };
+        : { kind: 'bgm', buffer: await player.loadFromUrl(playable.audio.url) };
     return { song: playable.song, chart, audio };
   }
 
@@ -1310,9 +1300,6 @@ export function bootShell(root: HTMLElement): void {
           viewMode: prefs.viewMode,
         });
       }
-      // Non-fatal library problems (e.g. imported songs unavailable) surface on the
-      // select screen instead of blocking entry (song-library.md MUST 6/8).
-      if (library.warnings.length > 0) showSelectError(library.warnings.join(' — '));
       renderSelectList();
       renderOptionsBar();
       machine.transition('SONG_SELECT');

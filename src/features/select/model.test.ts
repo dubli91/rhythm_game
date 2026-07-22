@@ -17,17 +17,35 @@ import {
 } from './model';
 
 function entry(overrides: Partial<LibraryEntry> & { songId: string }): LibraryEntry {
-  return {
+  const base = {
     title: overrides.songId,
     artist: 'artist',
     genre: 'GENRE',
     bpm: { min: 150, max: 150 },
-    source: 'builtin',
     charts: [
-      { chartId: `${overrides.songId}-n`, difficulty: 'NORMAL', level: 4, noteCount: 100 },
-      { chartId: `${overrides.songId}-h`, difficulty: 'HYPER', level: 8, noteCount: 300 },
+      { chartId: `${overrides.songId}-n`, difficulty: 'NORMAL' as const, level: 4, noteCount: 100 },
+      { chartId: `${overrides.songId}-h`, difficulty: 'HYPER' as const, level: 8, noteCount: 300 },
     ],
     ...overrides,
+  };
+  // The model never reads catalogEntry (shell-only lazy-load/preview metadata);
+  // a minimal consistent one satisfies the now-required field.
+  return {
+    ...base,
+    catalogEntry: base.catalogEntry ?? {
+      songId: base.songId,
+      title: base.title,
+      artist: base.artist,
+      genre: base.genre,
+      bpm: base.bpm,
+      charts: base.charts.map((c) => ({
+        ...c,
+        chartPath: `songs/${base.songId}/${c.chartId}.json`,
+      })),
+      audio: `songs/${base.songId}/audio.ogg`,
+      offsetMs: 0,
+      license: 'CC0',
+    },
   };
 }
 

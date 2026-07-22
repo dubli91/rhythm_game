@@ -1,6 +1,6 @@
 // Internal chart format (specs/chart-format.md).
 // This is the single source of truth for note/timing data: gameplay, rendering,
-// judgement, BMS import mixdown, and practice mode all consume these types.
+// judgement, and practice mode all consume these types.
 
 export const CHART_FORMAT_VERSION = 1;
 
@@ -56,8 +56,8 @@ export interface Chart {
 }
 
 export interface SongAudio {
-  source: 'builtin' | 'imported';
-  /** builtin: URL under public/songs/; imported: IndexedDB `audio` store key. */
+  source: 'builtin';
+  /** URL under public/songs/ (the practice song's ref points at its keysound sample). */
   ref: string;
   /** Per-song audio offset in ms, added when converting audio time to song time. */
   offsetMs: number;

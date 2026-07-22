@@ -1,6 +1,6 @@
 // Beat <-> ms timing conversion (specs/chart-format.md MUST 7, specs/playfield-rendering.md MUST 5).
-// This is the sync-critical core shared by judgement, rendering, and BMS mixdown: every
-// consumer that needs "when does beat X sound" or "what beat is the audio clock at now"
+// This is the sync-critical core shared by judgement and rendering: every consumer
+// that needs "when does beat X sound" or "what beat is the audio clock at now"
 // goes through this module.
 
 import type { Chart, ChartTiming } from './types';

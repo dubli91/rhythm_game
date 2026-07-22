@@ -17,6 +17,7 @@ Run these after implementing to get immediate feedback:
 - Tests: `npm run test` (Vitest, headless node env; watch mode: `npm run test:watch`)
 - Typecheck: `npm run typecheck` (`tsc --noEmit`, strict + verbatimModuleSyntax + noUncheckedIndexedAccess)
 - Lint/format check: `npm run lint` (Biome); auto-format: `npm run format`
+- Song asset consistency: `npm run validate:songs` (vite-node; checks public/songs/index.json vs chart JSONs/audio files, exit 1 on mismatch — run after regenerating song assets)
 - E2E (headless Chromium): build + `(npm run preview -- --port 4173 &)` + `LD_LIBRARY_PATH=/tmp/pwlibs/usr/lib/x86_64-linux-gnu node scripts/verify-e2e.mjs` — see .claude/skills/verify/SKILL.md for setup/gotchas (missing libnspr4/libnss3/libasound2 workaround, no sudo). Same recipe runs `scripts/verify-records-e2e.mjs` (records.v1 store assertions); e2e scripts must run from the repo root to resolve `playwright`.
 
 ## Operational Notes
@@ -37,7 +38,7 @@ Run these after implementing to get immediate feedback:
 - `verbatimModuleSyntax` is on: type-only imports must use `import type`.
 - All localStorage access goes through `src/lib/storage/local.ts` (versioned single-doc keys:
   `settings.v1`, `playOptions.v1`, `records.v1`). All IndexedDB access goes through
-  `src/lib/storage/idb.ts` (db `prismbeat`, stores `songs`/`audio`/`practicePatterns`).
+  `src/lib/storage/idb.ts` (db `prismbeat`, single store `practicePatterns`).
 - `AudioContext.currentTime` is the only game clock; never use rAF timestamps for song time.
 - Play-domain contracts live in src/features/play/types.ts (JudgementEvent, GaugeType); engines (judgement/scoring/gauge) are pure and headless-tested; render.ts is read-only (never computes time); controller.ts owns the rAF loop and all state.
 - Screen transitions must go through createScreenMachine (src/app/screens.ts) — it throws on transitions not in specs/app-shell-navigation.md.
