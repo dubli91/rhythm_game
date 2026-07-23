@@ -65,7 +65,7 @@ for (const entry of catalog.songs) {
     errors.push(`${where}: referenced audio file missing: ${audioRef}`);
   }
 
-  let songCharts;
+  let songCharts: Awaited<ReturnType<typeof loadBuiltinSong>>['charts'];
   try {
     songCharts = (await loadBuiltinSong(entry, fetchJson)).charts;
   } catch (error) {

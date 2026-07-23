@@ -104,6 +104,20 @@ describe('cycleJudgeNotes', () => {
     expect(fast?.timeMs).toBeCloseTo(6 * 250, 9);
     expect(slow?.timeMs).toBeCloseTo(6 * 1000, 9);
   });
+
+  it('an original→display laneMap substitutes lanes only — times untouched (shuffle MUST 18)', () => {
+    const notes: PracticePatternNote[] = [
+      { beat: 0, lane: 0 }, // scratch: map[0] = 0 keeps it in place
+      { beat: 0, lane: 1 },
+      { beat: 1.5, lane: 7 },
+    ];
+    const cycle = firstCycle(1, 120, cycleBeatsFor(1));
+    const mirrorMap = [0, 7, 6, 5, 4, 3, 2, 1];
+    const plain = cycleJudgeNotes(cycle, notes);
+    const mapped = cycleJudgeNotes(cycle, notes, mirrorMap);
+    expect(mapped.map((n) => n.timeMs)).toEqual(plain.map((n) => n.timeMs));
+    expect(mapped.map((n) => n.lane)).toEqual([0, 7, 1]);
+  });
 });
 
 describe('buildSessionNotes', () => {

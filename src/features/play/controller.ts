@@ -245,6 +245,10 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
   let lastDevMirrored = '';
   let lastGreenMirrored = '';
   let lastTimingMirrored = '';
+  // MUST 19 alignment probe extremes over real keydowns (Infinity = no samples).
+  let alignMinMs = Number.POSITIVE_INFINITY;
+  let alignMaxMs = Number.NEGATIVE_INFINITY;
+  let lastAlignMirrored = '';
 
   function flashOption(text: string): void {
     optionFlashText = text;
@@ -318,6 +322,20 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
       heldLanes[e.lane] = e.laneHeld;
       if (ending) return;
       const t = clock.eventTimeToSongTimeMs(e.timeStampMs);
+      // Judgement-display alignment probe (playfield-rendering.md MUST 19): the
+      // judge's input-axis time minus the render axis's last frame sample. The
+      // two come from the same SongClock, so with the offset applied identically
+      // this sits in [−outputLatency, one frame] regardless of the global
+      // offset (the input axis deliberately shifts by the device latency so
+      // inputs judge against the audio the player HEARS); a render axis that
+      // lost (or double-applied) the offset shifts every sample by exactly that
+      // offset on top. Session min/max mirror to data-align for e2e, which
+      // pins the latency term to 0 by removing getOutputTimestamp.
+      if (e.down) {
+        const misalignMs = t - view.songTimeMs;
+        if (misalignMs < alignMinMs) alignMinMs = misalignMs;
+        if (misalignMs > alignMaxMs) alignMaxMs = misalignMs;
+      }
       for (const miss of judge.advance(t)) dispatch(miss);
       if (e.down) {
         dispatch(judge.onInput(e.lane, t));
@@ -384,6 +402,7 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     delete opts.mount.dataset.green;
     delete opts.mount.dataset.timing;
     delete opts.mount.dataset.death;
+    delete opts.mount.dataset.align;
   }
 
   function buildResult(endProgress: number, finishedSong: boolean): PlayResult {
@@ -579,6 +598,14 @@ export async function startPlaySession(opts: PlaySessionOptions): Promise<PlaySe
     if (timingMirror !== lastTimingMirrored) {
       opts.mount.dataset.timing = timingMirror;
       lastTimingMirrored = timingMirror;
+    }
+    // MUST 19 alignment mirror (see the onLane probe): "<min>:<max>" in ms.
+    if (alignMinMs <= alignMaxMs) {
+      const alignMirror = `${Math.round(alignMinMs)}:${Math.round(alignMaxMs)}`;
+      if (alignMirror !== lastAlignMirrored) {
+        opts.mount.dataset.align = alignMirror;
+        lastAlignMirrored = alignMirror;
+      }
     }
     renderer.update(view);
 

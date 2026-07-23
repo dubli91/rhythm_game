@@ -77,6 +77,8 @@ export type PlayControlAction =
   | 'coverDown'
   | 'bpmUp'
   | 'bpmDown'
+  | 'shuffleEntry'
+  | 'shuffleUndo'
   | 'devOverlayToggle';
 
 // Control keys take priority over lane keys so a custom key map can never
@@ -115,7 +117,23 @@ export interface KeyLikeEvent {
   code: string;
   repeat: boolean;
   timeStamp: number;
+  /** KeyboardEvent.target; absent in headless test fakes. */
+  target?: unknown;
   preventDefault(): void;
+}
+
+/** A focused text widget owns the keyboard (app-shell-navigation.md MUST 17) —
+ *  needed since the practice shuffle entry (practice-mode.md MUST 15) is a DOM
+ *  input living inside a running session. Keydowns targeting one are ignored
+ *  here entirely (no lane/control dispatch, no preventDefault). Keyups are NOT
+ *  guarded: a lane key released after focus moved into a widget must still
+ *  clear its held state, or the beam would stick lit. */
+function isTextEntryTarget(target: unknown): boolean {
+  if (typeof target !== 'object' || target === null) {
+    return false;
+  }
+  const tag = (target as { tagName?: unknown }).tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
 /** Minimal structural subset of EventTarget this module depends on. */
@@ -187,6 +205,9 @@ export function createPlayInput(target: KeyEventSource, options: PlayInputOption
   let attached = false;
 
   function handleKeyDown(event: KeyLikeEvent): void {
+    if (isTextEntryTarget(event.target)) {
+      return;
+    }
     const control = controlCodes.get(event.code);
     if (control !== undefined) {
       if (event.repeat && !REPEATABLE_ACTIONS.has(control)) {

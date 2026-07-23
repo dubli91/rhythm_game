@@ -185,6 +185,11 @@ const STYLES = `
   .practice-btn { background: #16182b; color: #7df3ff; border: 1px solid #2a2a44; border-radius: 4px; padding: 6px 14px; font: inherit; font-size: 13px; letter-spacing: 0.08em; cursor: pointer; }
   .practice-btn:hover { border-color: #7df3ff; }
   .practice-btn.small { padding: 2px 8px; font-size: 11px; }
+  .practice-shuffle { position: fixed; top: 12px; right: 16px; z-index: 30; display: flex; gap: 8px; align-items: center; background: #10101ccc; border: 1px solid #2a2a44; border-radius: 6px; padding: 6px 10px; }
+  .practice-shuffle-label { color: #8a8aa8; font-size: 11px; letter-spacing: 0.12em; }
+  .practice-shuffle input { background: #0a0a14; color: #e8e8f0; border: 1px solid #2a2a44; border-radius: 4px; padding: 3px 8px; font: inherit; font-size: 13px; width: 88px; letter-spacing: 0.2em; }
+  .practice-shuffle input:focus { outline: none; border-color: #7df3ff; }
+  .practice-shuffle-notice { color: #ffe066; font-size: 11px; max-width: 260px; }
   .practice-meta { color: #8a8aa8; font-size: 13px; margin-bottom: 6px; }
   .practice-grid-head { display: grid; grid-template-columns: 64px repeat(7, 44px); gap: 2px; font-size: 11px; color: #55557a; text-align: center; margin-bottom: 2px; }
   .practice-grid { display: grid; grid-template-columns: 64px repeat(7, 44px); gap: 2px; max-height: 38vh; overflow-y: auto; padding: 4px; background: #0a0a14; border-radius: 6px; align-content: start; }

@@ -175,7 +175,8 @@ export function createPracticeEditor(opts: PracticeEditorOptions): PracticeEdito
       'div',
       'hint',
       '←→↑↓ move cursor · SPACE place/delete · ENTER start · ESC back to select · ' +
-        'in practice: ESC edit · PgUp/PgDn hi-speed · Home/↑↓ sudden+ · +/− next-loop BPM',
+        'in practice: ESC edit · PgUp/PgDn hi-speed · Home/↑↓ sudden+ · +/− next-loop BPM · ' +
+        'F2 shuffle 1-7 · F3 undo shuffle',
     ),
   );
 

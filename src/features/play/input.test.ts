@@ -373,6 +373,53 @@ describe('createPlayInput', () => {
     expect(shiftEvent.preventDefault).not.toHaveBeenCalled();
   });
 
+  describe('focused text widget owns the keyboard (app-shell-navigation.md MUST 17)', () => {
+    // Why: the practice shuffle entry (practice-mode.md MUST 15) is a DOM
+    // <input> living inside a running session — typing '7654321' or pressing
+    // Escape there must never judge lanes or quit the session.
+    it('ignores keydowns targeting an INPUT/TEXTAREA/SELECT — lanes AND controls', () => {
+      const { source, onLane, onControl, input } = makeHarness();
+      input.attach();
+
+      for (const tagName of ['INPUT', 'TEXTAREA', 'SELECT']) {
+        const lane = makeEvent('KeyS', { target: { tagName } });
+        source.dispatch('keydown', lane);
+        const control = makeEvent('Escape', { target: { tagName } });
+        source.dispatch('keydown', control);
+        // Ignored entirely: no dispatch, and no preventDefault (the widget
+        // needs the default behavior — text insertion, caret moves).
+        expect(lane.preventDefault).not.toHaveBeenCalled();
+        expect(control.preventDefault).not.toHaveBeenCalled();
+      }
+      expect(onLane).not.toHaveBeenCalled();
+      expect(onControl).not.toHaveBeenCalled();
+    });
+
+    it('non-widget targets (body, canvas, absent) still dispatch normally', () => {
+      const { source, onLane, input } = makeHarness();
+      input.attach();
+
+      source.dispatch('keydown', makeEvent('KeyS', { target: { tagName: 'BODY' } }));
+      source.dispatch('keyup', makeEvent('KeyS', { target: { tagName: 'BODY' } }));
+      source.dispatch('keydown', makeEvent('KeyS', { target: null }));
+      expect(onLane).toHaveBeenCalledTimes(3);
+    });
+
+    it('keyups are NOT guarded: a lane released after focus moved into a widget still clears', () => {
+      const { source, onLane, input } = makeHarness();
+      input.attach();
+
+      source.dispatch('keydown', makeEvent('KeyS'));
+      expect(input.isHeld(1)).toBe(true);
+      // Focus moved into the shuffle input before the key was released.
+      source.dispatch('keyup', makeEvent('KeyS', { target: { tagName: 'INPUT' } }));
+      expect(input.isHeld(1)).toBe(false);
+      expect(onLane).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lane: 1, down: false, laneHeld: false }),
+      );
+    });
+  });
+
   describe('scratch secondary key (input-handling.md MUST 12-13)', () => {
     const mapWithSecondary: LaneKeyMap = {
       lanes: [...DEFAULT_KEY_MAP.lanes],

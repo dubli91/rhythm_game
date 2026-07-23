@@ -184,6 +184,46 @@ describe('eventTimeToSongTimeMs', () => {
   });
 });
 
+describe('render/input axis agreement (playfield-rendering.md MUST 19)', () => {
+  // The alignment guarantee "a δ=0 input coincides with the note at the
+  // judgement line" reduces to: songTimeMs() (the render/frame axis) and
+  // eventTimeToSongTimeMs() (the judge input axis) must return the SAME value
+  // for the same physical instant, for ANY offset. If they agree, then at the
+  // instant an input's song time equals a note's timeMs, the frame axis reads
+  // that same value, currentBeat = msToBeat(noteTime) = note.beat, and the
+  // render formula y = lineY − (beat − currentBeat)·ppb·hiSpeed collapses to
+  // the judgement line for every hi-speed/green-lock/SUDDEN+ setting.
+  it.each([-60, 0, 60])(
+    'both axes read identically at the same instant (globalOffset %dms)',
+    (globalOffsetMs) => {
+      // Fixed perf↔ctx correspondence: ctx 8.0s ↔ perf 5000ms (skew +3.0s).
+      const sources = makeSources({
+        ctxNow: () => 8.0,
+        performanceNow: () => 5000,
+        getOutputTimestamp: () => ({ contextTime: 8.0, performanceTime: 5000 }),
+      });
+      const clock = createSongClock(sources, { globalOffsetMs, perSongOffsetMs: 7 });
+      clock.start(1.0);
+
+      // An input event stamped at the exact instant the frame samples the clock
+      // maps to the exact same song time — the offset cancels symmetrically.
+      expect(clock.eventTimeToSongTimeMs(5000)).toBe(clock.songTimeMs());
+    },
+  );
+
+  it('changing the offset mid-session shifts both axes by the same amount', () => {
+    const sources = makeSources({ ctxNow: () => 8.0, performanceNow: () => 5000 });
+    const clock = createSongClock(sources);
+    clock.start(1.0);
+    const frameBefore = clock.songTimeMs();
+    const inputBefore = clock.eventTimeToSongTimeMs(5000);
+
+    clock.setGlobalOffsetMs(60);
+    expect(clock.songTimeMs()).toBe(frameBefore - 60);
+    expect(clock.eventTimeToSongTimeMs(5000)).toBe(inputBefore - 60);
+  });
+});
+
 describe('clampGlobalOffsetMs', () => {
   it('clamps to [-200, 200] and passes values inside the range through unchanged', () => {
     expect(clampGlobalOffsetMs(-500)).toBe(-200);

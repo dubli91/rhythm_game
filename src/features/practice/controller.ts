@@ -60,6 +60,12 @@ import {
   sessionBeatAt,
 } from './schedule';
 import {
+  IDENTITY_SHUFFLE,
+  createShuffleState,
+  parseShuffleMapping,
+  shuffleLaneMap,
+} from './shuffle';
+import {
   type CumulativeStats,
   type LoopStats,
   createPracticeStats,
@@ -113,8 +119,16 @@ export interface PracticeSession {
 
 /** Practice BPM adjust step per keypress (practice-mode.md MUST 9). */
 export const PRACTICE_BPM_STEP = 5;
-/** Practice-only control keys, layered over the reserved base set. */
-export const PRACTICE_CONTROL_CODES = { Equal: 'bpmUp', Minus: 'bpmDown' } as const;
+/** Practice-only control keys, layered over the reserved base set. F2/F3 drive
+ *  the lane shuffle (practice-mode.md MUST 15-17); like Equal/Minus they are
+ *  practice-only extras, so they shadow a custom lane binding of the same code
+ *  only inside practice (the Equal/Minus precedent). */
+export const PRACTICE_CONTROL_CODES = {
+  Equal: 'bpmUp',
+  Minus: 'bpmDown',
+  F2: 'shuffleEntry',
+  F3: 'shuffleUndo',
+} as const;
 
 /** Session-size cap when no target loop count is set: enough for any real
  *  practice run while bounding the renderer's session-note array. */
@@ -187,6 +201,12 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
   const heldLanes: boolean[] = new Array<boolean>(8).fill(false);
   let retiredThrough = 0; // loops < this are finalized
   let pendingBpm = opts.pattern.bpm; // applies from the next locked cycle (MUST 9)
+  // Lane shuffle (MUST 15-18): session-only state — a fresh session always
+  // starts at the identity (MUST 18: returning to the editor resets it, which
+  // holds by construction since nothing threads a mapping back in).
+  const shuffle = createShuffleState();
+  const cycleShuffles: string[] = []; // mapping frozen per locked cycle, like cycle.bpm
+  let lastShuffleMirrored = '';
   let lastJudgement: PlayFrameView['lastJudgement'] = null;
   let rafId = 0;
   let running = true;
@@ -214,7 +234,25 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     optionFlashUntilMs = performance.now() + OPTION_FLASH_MS;
   }
 
-  /** Lock the next cycle: freeze its BPM, create its judge, schedule its clicks. */
+  /** Rewrites the renderer's session-note lanes for every NOT-yet-locked loop
+   *  to the current shuffle mapping. The renderer re-reads note.lane each frame
+   *  from this same array, so an applied/undone shuffle shows up immediately on
+   *  any upcoming loop's notes already scrolling in — while locked cycles (the
+   *  one in play and any already prepped) keep the lanes their judges were
+   *  built with, which is what "applies from the next loop" means (MUST 16). */
+  function remapUnlockedSessionNotes(): void {
+    const laneMap = shuffleLaneMap(shuffle.current());
+    for (let si = cycles.length * notesPerLoop; si < sessionNotes.length; si++) {
+      const pat = patternNotes[si % notesPerLoop];
+      const sess = sessionNotes[si];
+      if (pat !== undefined && sess !== undefined) {
+        sess.lane = laneMap[pat.lane] ?? pat.lane;
+      }
+    }
+  }
+
+  /** Lock the next cycle: freeze its BPM + shuffle mapping, create its judge,
+   *  schedule its clicks. */
   function prepCycle(): void {
     const index = cycles.length;
     if (index >= loopsTotal) return;
@@ -224,7 +262,15 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     const cycle =
       prev === undefined ? firstCycle(0, pendingBpm, beatsPerCycle) : nextCycle(prev, pendingBpm);
     cycles.push(cycle);
-    judges.push(createJudge(cycleJudgeNotes(cycle, patternNotes)));
+    // The judge sees the same substituted lanes the renderer displays (the
+    // arrange.ts principle) — physical lane i always judges what screen lane i
+    // shows. Times are untouched, so judgement/stats stay shuffle-invariant
+    // (MUST 18). The renderer slice for this cycle was already remapped by
+    // remapUnlockedSessionNotes (or is identity as built); rewriting it here
+    // would race the mapping frozen into the judge, so it is left alone.
+    const mapping = shuffle.current();
+    cycleShuffles.push(mapping);
+    judges.push(createJudge(cycleJudgeNotes(cycle, patternNotes, shuffleLaneMap(mapping))));
     const now = sources.ctxNow();
     for (const click of cycleClickTimes(cycle)) {
       const when = t0 + click.timeSec;
@@ -235,6 +281,93 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     }
   }
   prepCycle();
+
+  // Shuffle entry UI (MUST 15-16): a real DOM input overlay, because the
+  // acceptance criteria demand rejecting arbitrary text like '123456A' with a
+  // reason — control-code digits couldn't even represent that input. While the
+  // input is focused it owns the keyboard (createPlayInput ignores keydowns
+  // targeting text widgets, app-shell-navigation.md MUST 17); Escape blurs it
+  // back to the session instead of quitting.
+  const shuffleUi = document.createElement('div');
+  shuffleUi.className = 'practice-shuffle';
+  const shuffleLabel = document.createElement('span');
+  shuffleLabel.className = 'practice-shuffle-label';
+  shuffleLabel.textContent = 'SHUFFLE';
+  const shuffleInput = document.createElement('input');
+  shuffleInput.type = 'text';
+  shuffleInput.dataset.role = 'shuffle-input';
+  shuffleInput.placeholder = IDENTITY_SHUFFLE;
+  shuffleInput.spellcheck = false;
+  const shuffleApplyBtn = document.createElement('button');
+  shuffleApplyBtn.type = 'button';
+  shuffleApplyBtn.className = 'practice-btn';
+  shuffleApplyBtn.dataset.role = 'shuffle-apply';
+  shuffleApplyBtn.textContent = 'APPLY';
+  const shuffleUndoBtn = document.createElement('button');
+  shuffleUndoBtn.type = 'button';
+  shuffleUndoBtn.className = 'practice-btn';
+  shuffleUndoBtn.dataset.role = 'shuffle-undo';
+  shuffleUndoBtn.textContent = 'UNDO';
+  const shuffleNotice = document.createElement('span');
+  shuffleNotice.className = 'practice-shuffle-notice';
+  shuffleNotice.dataset.role = 'shuffle-notice';
+  shuffleUi.append(shuffleLabel, shuffleInput, shuffleApplyBtn, shuffleUndoBtn, shuffleNotice);
+  opts.mount.append(shuffleUi);
+
+  function performApplyShuffle(): void {
+    const parsed = parseShuffleMapping(shuffleInput.value);
+    if (!parsed.ok) {
+      // MUST 16: reject with the reason, keep the current mapping. Focus stays
+      // in the box so the entry can be corrected in place.
+      shuffleNotice.textContent = `REJECTED: ${parsed.reason}`;
+      return;
+    }
+    if (parsed.mapping === shuffle.current()) {
+      shuffleNotice.textContent = `SHUFFLE ${parsed.mapping} ALREADY SET`;
+      shuffleInput.blur();
+      return;
+    }
+    shuffle.apply(parsed.mapping);
+    remapUnlockedSessionNotes();
+    shuffleNotice.textContent = `SHUFFLE ${parsed.mapping} FROM NEXT LOOP`;
+    flashOption(`SHUFFLE ${parsed.mapping}`);
+    shuffleInput.value = '';
+    shuffleInput.blur();
+    infoDirty = true;
+  }
+
+  function performShuffleUndo(): void {
+    if (!shuffle.undo()) {
+      shuffleNotice.textContent = 'NOTHING TO UNDO';
+      return;
+    }
+    remapUnlockedSessionNotes();
+    // MUST 17: reverts to the previous mapping, also from the next loop.
+    shuffleNotice.textContent = `UNDO: ${shuffle.current()} FROM NEXT LOOP`;
+    flashOption(`SHUFFLE ${shuffle.current()}`);
+    infoDirty = true;
+  }
+
+  shuffleInput.addEventListener('keydown', (event) => {
+    if (event.code === 'Enter' || event.code === 'NumpadEnter') {
+      event.preventDefault();
+      performApplyShuffle();
+    } else if (event.code === 'Escape') {
+      event.preventDefault();
+      shuffleInput.blur();
+    }
+    // Everything else types normally; createPlayInput's text-widget guard keeps
+    // lane/control handling away while the input is focused.
+    event.stopPropagation();
+  });
+  shuffleApplyBtn.addEventListener('click', () => {
+    performApplyShuffle();
+    shuffleApplyBtn.blur();
+  });
+  shuffleUndoBtn.addEventListener('click', () => {
+    performShuffleUndo();
+    shuffleUndoBtn.blur();
+  });
 
   function dispatch(loopIndex: number, event: JudgementEvent): void {
     stats.apply(loopIndex, event);
@@ -320,6 +453,14 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
           infoDirty = true;
           break;
         }
+        case 'shuffleEntry':
+          // F2: hand the keyboard to the shuffle entry box (MUST 15).
+          shuffleInput.focus();
+          shuffleInput.select();
+          break;
+        case 'shuffleUndo':
+          performShuffleUndo();
+          break;
         case 'devOverlayToggle':
           devOverlay.toggle();
           break;
@@ -378,8 +519,10 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     input.detach();
     sfx.cancelAll(); // clicks are ≤60ms buffers — no fade path needed
     renderer.destroy();
+    shuffleUi.remove();
     delete opts.mount.dataset.devOverlay;
     delete opts.mount.dataset.timing;
+    delete opts.mount.dataset.shuffle;
     opts.onExit(buildOutcome(endedBy));
   }
 
@@ -388,6 +531,14 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     const currentCycle = cycles[Math.min(currentLoop, cycles.length - 1)];
     if (currentCycle !== undefined && pendingBpm !== currentCycle.bpm) {
       lines.push(`NEXT LOOP BPM ${pendingBpm}`);
+    }
+    // Current shuffle mapping on the HUD (MUST 16) — the mapping in effect for
+    // the loop being played, plus the pending one when it differs (BPM pattern).
+    const loopShuffle =
+      cycleShuffles[Math.min(currentLoop, cycleShuffles.length - 1)] ?? IDENTITY_SHUFFLE;
+    lines.push(`SHUFFLE ${loopShuffle}`);
+    if (shuffle.current() !== loopShuffle) {
+      lines.push(`NEXT LOOP SHUFFLE ${shuffle.current()}`);
     }
     lines.push(countsLine('THIS ', stats.liveSummary(currentLoop)));
     const last = stats.lastLoop();
@@ -511,6 +662,15 @@ export async function startPracticeSession(opts: PracticeSessionOptions): Promis
     if (timingMirror !== lastTimingMirrored) {
       opts.mount.dataset.timing = timingMirror;
       lastTimingMirrored = timingMirror;
+    }
+    // Shuffle e2e mirror: "<loop's mapping>|<pending mapping>" — canvas HUD
+    // text is unreadable to Playwright (data-green precedent).
+    const loopShuffle =
+      cycleShuffles[Math.min(currentLoop, cycleShuffles.length - 1)] ?? IDENTITY_SHUFFLE;
+    const shuffleMirror = `${loopShuffle}|${shuffle.current()}`;
+    if (shuffleMirror !== lastShuffleMirrored) {
+      opts.mount.dataset.shuffle = shuffleMirror;
+      lastShuffleMirrored = shuffleMirror;
     }
     renderer.update(view);
 

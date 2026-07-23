@@ -900,6 +900,107 @@ await step('reload -> saved pattern survives (IndexedDB) and loads', async () =>
   if (!meta.includes('16 note(s)')) throw new Error('loaded pattern should have 16 notes');
 });
 
+// --- Lane shuffle (practice-mode.md MUST 15-18 acceptance criteria) ---
+const shuffleMirror = () =>
+  page.$eval('[data-screen="PRACTICE_PLAY"]', (n) => n.dataset.shuffle ?? '');
+const shuffleNotice = () => page.$eval('[data-role="shuffle-notice"]', (n) => n.textContent);
+
+await step('lane shuffle: 7654321 applies from the NEXT loop (MUST 15-16)', async () => {
+  await page.fill('label:has-text("LOOPS") input', '0'); // until Escape
+  await page.click('button:has-text("START PRACTICE")');
+  await page.waitForSelector('[data-screen="PRACTICE_PLAY"].active canvas', { timeout: 20000 });
+  await page.waitForFunction(
+    () => document.querySelector('[data-screen="PRACTICE_PLAY"]')?.dataset?.shuffle !== undefined,
+    { timeout: 10000 },
+  );
+  if ((await shuffleMirror()) !== '1234567|1234567')
+    throw new Error(`session must start at the identity mapping: ${await shuffleMirror()}`);
+  await page.fill('[data-role="shuffle-input"]', '7654321');
+  await page.click('[data-role="shuffle-apply"]');
+  const notice = await shuffleNotice();
+  if (!notice.includes('SHUFFLE 7654321 FROM NEXT LOOP'))
+    throw new Error(`apply notice missing: ${notice}`);
+  // Pending immediately, current unchanged until the loop boundary.
+  const pending = await shuffleMirror();
+  if (pending !== '1234567|7654321')
+    throw new Error(`mapping must stay until the next loop: ${pending}`);
+  // 1 bar @120 = 8-beat cycle = 4s; the next boundary is at most one cycle away.
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[data-screen="PRACTICE_PLAY"]')?.dataset?.shuffle ===
+      '7654321|7654321',
+    { timeout: 15000 },
+  );
+  await page.screenshot({ path: SHOT('15-shuffle-applied') });
+});
+
+await step('lane shuffle: non-permutation inputs rejected with a reason (MUST 16)', async () => {
+  const cases = [
+    ['1234566', 'DUPLICATE'],
+    ['123456', '7 DIGITS'],
+    ['123456A', "'A'"],
+  ];
+  for (const [entry, fragment] of cases) {
+    await page.fill('[data-role="shuffle-input"]', entry);
+    await page.click('[data-role="shuffle-apply"]');
+    const notice = await shuffleNotice();
+    if (!notice.includes('REJECTED') || !notice.includes(fragment))
+      throw new Error(`'${entry}' should be rejected naming ${fragment}: ${notice}`);
+    if ((await shuffleMirror()) !== '7654321|7654321')
+      throw new Error(`rejected entry must keep the current mapping (${entry})`);
+  }
+});
+
+await step(
+  'lane shuffle: F3 undo reverts to the identity from the NEXT loop (MUST 17)',
+  async () => {
+    await page.keyboard.press('F3');
+    const notice = await shuffleNotice();
+    if (!notice.includes('UNDO: 1234567 FROM NEXT LOOP'))
+      throw new Error(`undo notice missing: ${notice}`);
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[data-screen="PRACTICE_PLAY"]')?.dataset?.shuffle ===
+        '1234567|1234567',
+      { timeout: 15000 },
+    );
+    await page.keyboard.press('F3');
+    if (!(await shuffleNotice()).includes('NOTHING TO UNDO'))
+      throw new Error('undo past the identity should report nothing to undo');
+  },
+);
+
+await step('lane shuffle: F2 focuses entry; Escape blurs it without quitting', async () => {
+  await page.keyboard.press('F2');
+  await page.keyboard.type('2416375');
+  await page.keyboard.press('Enter');
+  const notice = await shuffleNotice();
+  if (!notice.includes('SHUFFLE 2416375 FROM NEXT LOOP'))
+    throw new Error(`keyboard entry path failed: ${notice}`);
+  await page.keyboard.press('F2');
+  await page.keyboard.press('Escape'); // blurs the input, must NOT quit
+  const stillPlaying = await page.$('[data-screen="PRACTICE_PLAY"].active canvas');
+  if (stillPlaying === null) throw new Error('Escape in the shuffle entry quit the session');
+  await page.keyboard.press('Escape'); // now unfocused: quit to the editor
+  await page.waitForSelector('[data-screen="PRACTICE_EDIT"].active', { timeout: 5000 });
+});
+
+await step(
+  'lane shuffle: session-only — a fresh session starts at the identity (MUST 18)',
+  async () => {
+    await page.click('button:has-text("START PRACTICE")');
+    await page.waitForSelector('[data-screen="PRACTICE_PLAY"].active canvas', { timeout: 20000 });
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[data-screen="PRACTICE_PLAY"]')?.dataset?.shuffle ===
+        '1234567|1234567',
+      { timeout: 10000 },
+    );
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[data-screen="PRACTICE_EDIT"].active', { timeout: 5000 });
+  },
+);
+
 await step('Escape returns editor -> song select', async () => {
   await page.keyboard.press('Escape');
   await page.waitForSelector('[data-screen="SONG_SELECT"].active .song-list li.selected', {
@@ -1204,6 +1305,67 @@ await step('gauge-out death: freeze + fade before FAILED results (SHOULD 15)', a
   const restored = await page.$eval('.options-bar', (n) => n.textContent);
   if (!restored.includes('NORMAL')) throw new Error(`gauge not restored: ${restored}`);
 });
+
+await step(
+  'judgement-display alignment holds under a +60ms global offset (rendering MUST 19)',
+  async () => {
+    // data-align mirrors min:max of (judge input-axis time − render axis's last
+    // frame sample) over real keydowns. With both axes on the same SongClock the
+    // offset cancels: every sample sits in [0, one frame] (minus small skew
+    // jitter). A render axis that LOST the offset shifts every sample by −60ms;
+    // one that double-applied it shifts by +60ms — the session MIN over many
+    // mash presses concentrates near the true axis gap regardless of fps, so
+    // bounding it in (−25, +30) discriminates both failure modes without
+    // flaking on slow headless frames.
+    //
+    // The input axis ALSO carries output-latency compensation (inputs judge
+    // against the audio the player hears): getOutputTimestamp shifts every
+    // sample by −latency. Real devices: 0..300ms; headless's stalled pipeline
+    // fakes ~150ms of it (context-age-dependent), which would swamp the offset
+    // signal — so this probe removes the API and pins the sync-skew path, which
+    // is unbiased by construction. Offset symmetry is identical in both paths.
+    await page.addInitScript(() => {
+      if (window.AudioContext !== undefined) {
+        AudioContext.prototype.getOutputTimestamp = undefined;
+      }
+    });
+    await page.evaluate(() => {
+      const raw = localStorage.getItem('settings.v1');
+      if (raw === null) throw new Error('settings.v1 missing — cannot seed the offset');
+      const doc = JSON.parse(raw);
+      doc.data.globalOffsetMs = 60;
+      localStorage.setItem('settings.v1', JSON.stringify(doc));
+    });
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.song-list li.selected', { timeout: 8000 });
+    const bar = await page.$eval('.options-bar', (n) => n.textContent);
+    if (!bar.includes('AUTOPLAY OFF')) throw new Error('alignment probe needs real input');
+    await navigateToSong('First Light');
+    await page.keyboard.press('Enter'); // expand
+    await page.waitForSelector('.song-list li.chart-row', { timeout: 5000 });
+    await page.keyboard.press('Enter'); // play NORMAL (recovery gauge — cannot die)
+    await page.waitForSelector('.screen-play canvas', { timeout: 20000 });
+    await page.waitForTimeout(1500); // past the lead-in so notes are in flight
+    await mashAllLanes(4);
+    const align = await page.$eval('[data-screen="PLAY"]', (n) => n.dataset.align ?? '');
+    console.log(`  data-align (min:max ms): ${align}`);
+    const [min] = align.split(':').map(Number);
+    if (!Number.isFinite(min)) throw new Error(`no alignment samples mirrored: '${align}'`);
+    if (min <= -25 || min >= 30)
+      throw new Error(`render/judge axes disagree under +60ms offset: min ${min}ms`);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.result-status', { timeout: 8000 });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.song-list li.selected', { timeout: 5000 });
+    // Leave the stored offset back at 0 for whoever runs next.
+    await page.evaluate(() => {
+      const doc = JSON.parse(localStorage.getItem('settings.v1'));
+      doc.data.globalOffsetMs = 0;
+      localStorage.setItem('settings.v1', JSON.stringify(doc));
+    });
+  },
+);
 
 console.log('--- console messages (last 25) ---');
 for (const m of consoleMsgs.slice(-25)) console.log(m);

@@ -86,14 +86,18 @@ export function cycleClickTimes(cycle: LoopCycle): Array<{ timeSec: number; stro
 }
 
 /** Judge notes for one cycle, in session ms (offset-free — the SongClock
- *  applies the global offset to input times, same convention as song play). */
+ *  applies the global offset to input times, same convention as song play).
+ *  `laneMap` (original → display, practice shuffle MUST 15/18) substitutes
+ *  lanes only — times are untouched, which is what makes judgement/stats
+ *  provably shuffle-invariant. */
 export function cycleJudgeNotes(
   cycle: LoopCycle,
   patternNotes: readonly PracticePatternNote[],
+  laneMap?: readonly number[],
 ): JudgeNote[] {
   return patternNotes.map((note) => ({
     timeMs: (cycle.startSec + (COUNT_IN_BEATS + note.beat) * cycle.secPerBeat) * 1000,
-    lane: note.lane,
+    lane: laneMap === undefined ? note.lane : (laneMap[note.lane] ?? note.lane),
   }));
 }
 
